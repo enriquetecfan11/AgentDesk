@@ -4,8 +4,8 @@
 Server-side API for AI agents (organizer/executor/analyst) to operate on the workspace.
 
 Authentication: `Authorization: Bearer <agent token>` where the token was generated at agent
-registration (shown once in the UI). Tokens are stored as sha256 hashes in `agents.token_hash`.
-A lookup table `agent_token_lookup` maps token_hash -> agent_id for O(1) validation.
+registration (shown once in the UI). Tokens are stored as sha256 hashes in `agents.token_hash`,
+which is indexed by migration 20261018120100, so validation is a single index lookup.
 
 Routes (all POST unless noted):
 - GET  /agent-api           -> identity: agent name, kind, permissions
@@ -13,7 +13,7 @@ Routes (all POST unless noted):
 Actions:
 - list_delegations          -> pending/in_progress delegations for this agent (with task + context)
 - start_run                 -> { delegation_id, input? } creates a run (status started)
-- update_run                -> { run_id, status, summary?, error?, finished? } updates own run
+- update_run                -> { run_id, status, summary?, error? } updates own run
 - add_artifact              -> { run_id?, task_id?, kind, title, content_text?, url? }
 - read_task                 -> { task_id } read a task's full detail (own delegations only)
 - add_note                  -> { task_id, title, body_md }
@@ -21,28 +21,54 @@ Actions:
                                 with origin=agent and a delegation? no — plain task, origin agent.
 
 Permission model (agents.permissions jsonb):
-- read_delegations, write_runs, write_artifacts, read_tasks, propose_task
+- read_delegations, write_runs, write_artifacts, write_notes, read_tasks, propose_task
 
-CORS: mandatory headers on every response including OPTIONS preflight.
+Ownership rules: every write is scoped to this agent. run_id must belong to a
+run this agent started; task_id must be part of one of this agent's
+delegations. There is no workspace-wide write.
+
+Input limits: titles are capped at 300 characters, free text at 20k, and every
+field is type-checked before it reaches the database. Caller-safe validation
+problems return 400; database errors are logged server-side and returned as an
+opaque 500.
+
+No CORS headers: the only clients are the workspace's own agents over a bearer
+token, which is not a browser credential, so no cross-origin surface is needed.
 */
 
-import { createClient } from 'npm:@supabase/supabase-js@2.58.0';
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.58.0';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info, Apikey',
-};
+const MAX_TITLE = 300;
+const MAX_TEXT = 20000;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
   });
 }
 
 function err(message: string, status = 400): Response {
   return json({ error: message }, status);
+}
+
+/** Database errors are logged server-side and surfaced as a generic 500. */
+function dbErr(e: unknown, context: string): Response {
+  console.error(context, e);
+  return err('Internal error', 500);
+}
+
+/** Caller-safe validation failure; anything else is treated as internal. */
+class ValidationError extends Error {}
+
+function str(value: unknown, max: number): string | null {
+  return typeof value === 'string' && value.length <= max ? value : null;
+}
+
+function requiredStr(value: unknown, max: number, field: string): string {
+  const s = str(value, max);
+  if (s === null || !s.trim()) throw new ValidationError(`${field} must be a non-empty string under ${max} characters`);
+  return s.trim();
 }
 
 async function sha256Hex(text: string): Promise<string> {
@@ -60,7 +86,7 @@ interface AgentRow {
   actor_id: string | null;
 }
 
-async function authenticate(req: Request, admin: ReturnType<typeof createClient>): Promise<AgentRow | null> {
+async function authenticate(req: Request, admin: SupabaseClient): Promise<AgentRow | null> {
   const auth = req.headers.get('Authorization') ?? '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
   if (!token || !token.startsWith('agt_')) return null;
@@ -76,10 +102,6 @@ async function authenticate(req: Request, admin: ReturnType<typeof createClient>
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { status: 200, headers: corsHeaders });
-  }
-
   const admin = createClient(
     Deno.env.get('SUPABASE_URL') ?? '',
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
@@ -89,8 +111,6 @@ Deno.serve(async (req: Request) => {
   try {
     const agent = await authenticate(req, admin);
     if (!agent) return err('Unauthorized: invalid or inactive agent token', 401);
-
-    const url = new URL(req.url);
 
     if (req.method === 'GET') {
       return json({
@@ -130,8 +150,7 @@ Deno.serve(async (req: Request) => {
 
       case 'start_run': {
         if (!has('write_runs')) return err('Missing permission: write_runs', 403);
-        const delegationId = body.delegation_id as string;
-        if (!delegationId) return err('Missing delegation_id');
+        const delegationId = requiredStr(body.delegation_id, 64, 'delegation_id');
         const { data: delegation } = await admin
           .from('delegations')
           .select('id, agent_id, status')
@@ -140,13 +159,16 @@ Deno.serve(async (req: Request) => {
         if (!delegation || (delegation as { agent_id: string }).agent_id !== agent.id) {
           return err('Delegation not found for this agent', 404);
         }
+        const input = body.input !== undefined && body.input !== null && typeof body.input === 'object' && !Array.isArray(body.input)
+          ? body.input as Record<string, unknown>
+          : {};
         const { data: run, error } = await admin
           .from('runs')
           .insert({
             delegation_id: delegationId,
             agent_id: agent.id,
             status: 'started',
-            input: (body.input as Record<string, unknown>) ?? {},
+            input,
           })
           .select('*')
           .single();
@@ -157,10 +179,10 @@ Deno.serve(async (req: Request) => {
 
       case 'update_run': {
         if (!has('write_runs')) return err('Missing permission: write_runs', 403);
-        const runId = body.run_id as string;
+        const runId = requiredStr(body.run_id, 64, 'run_id');
         const status = body.status as string;
-        if (!runId || !['running', 'succeeded', 'failed'].includes(status)) {
-          return err('Missing run_id or invalid status (running|succeeded|failed)');
+        if (!['running', 'succeeded', 'failed'].includes(status)) {
+          return err('Invalid status (running|succeeded|failed)');
         }
         const { data: existing } = await admin
           .from('runs')
@@ -171,8 +193,10 @@ Deno.serve(async (req: Request) => {
           return err('Run not found for this agent', 404);
         }
         const patch: Record<string, unknown> = { status };
-        if (typeof body.summary === 'string') patch.summary = body.summary;
-        if (typeof body.error === 'string') patch.error = body.error;
+        const summary = str(body.summary, MAX_TEXT);
+        const errorText = str(body.error, MAX_TEXT);
+        if (summary !== null) patch.summary = summary;
+        if (errorText !== null) patch.error = errorText;
         if (status === 'succeeded' || status === 'failed') {
           patch.finished_at = new Date().toISOString();
           const { data: run } = await admin.from('runs').select('started_at').eq('id', runId).maybeSingle();
@@ -187,38 +211,39 @@ Deno.serve(async (req: Request) => {
           .select('*')
           .single();
         if (error) throw error;
-        await logEvent(`run.status_${status}`, 'run', runId, typeof body.summary === 'string' ? body.summary.slice(0, 80) : null);
+        await logEvent(`run.status_${status}`, 'run', runId, summary !== null ? summary.slice(0, 80) : null);
         return json({ run });
       }
 
       case 'add_artifact': {
         if (!has('write_artifacts')) return err('Missing permission: write_artifacts', 403);
-        const title = body.title as string;
-        if (!title) return err('Missing title');
+        const title = requiredStr(body.title, MAX_TITLE, 'title');
         const patch: Record<string, unknown> = {
           agent_id: agent.id,
           kind: (['text', 'code', 'url', 'file'].includes(body.kind) ? body.kind : 'text') as string,
           title,
-          content_text: (body.content_text as string) ?? null,
-          url: (body.url as string) ?? null,
-          run_id: (body.run_id as string) ?? null,
-          task_id: (body.task_id as string) ?? null,
-          project_id: (body.project_id as string) ?? null,
+          content_text: str(body.content_text, MAX_TEXT),
+          url: str(body.url, 2048),
+          run_id: str(body.run_id, 64),
+          task_id: str(body.task_id, 64),
         };
-        // SECURITY: server-side ownership validation of run_id / task_id / project_id refs
+        // Ownership validation: an artifact may only hang off this agent's own
+        // run, or a task this agent has been delegated. project_id is
+        // deliberately not accepted here — it cannot be scoped to the agent.
         if (patch.run_id) {
           const { data: run } = await admin.from('runs').select('id, agent_id').eq('id', patch.run_id as string).maybeSingle();
           if (!run || (run as { agent_id: string }).agent_id !== agent.id) return err('run_id not owned by this agent', 403);
         }
         if (patch.task_id) {
-          const { data: task } = await admin
+          const { data: link } = await admin
             .from('delegations')
             .select('task_id')
             .eq('agent_id', agent.id)
             .eq('task_id', patch.task_id as string)
             .maybeSingle();
-          if (!task) return err('task_id is not part of this agent delegations', 403);
+          if (!link) return err('task_id is not part of this agent delegations', 403);
         }
+        if (!patch.run_id && !patch.task_id) return err('add_artifact requires run_id or task_id');
         const { data: artifact, error } = await admin.from('artifacts').insert(patch).select('*').single();
         if (error) throw error;
         await logEvent('artifact.created', 'artifact', (artifact as { id: string }).id, title);
@@ -227,8 +252,7 @@ Deno.serve(async (req: Request) => {
 
       case 'read_task': {
         if (!has('read_tasks')) return err('Missing permission: read_tasks', 403);
-        const taskId = body.task_id as string;
-        if (!taskId) return err('Missing task_id');
+        const taskId = requiredStr(body.task_id, 64, 'task_id');
         const { data: link } = await admin
           .from('delegations')
           .select('task_id')
@@ -242,9 +266,11 @@ Deno.serve(async (req: Request) => {
       }
 
       case 'add_note': {
-        const taskId = body.task_id as string;
-        const title = body.title as string;
-        if (!taskId || !title) return err('Missing task_id or title');
+        // Previously this action performed a write with no permission check at
+        // all, so any authenticated agent token could write notes.
+        if (!has('write_notes')) return err('Missing permission: write_notes', 403);
+        const taskId = requiredStr(body.task_id, 64, 'task_id');
+        const title = requiredStr(body.title, MAX_TITLE, 'title');
         const { data: link } = await admin
           .from('delegations')
           .select('task_id')
@@ -254,7 +280,7 @@ Deno.serve(async (req: Request) => {
         if (!link) return err('Task is not part of this agent delegations', 403);
         const { data: note, error } = await admin
           .from('notes')
-          .insert({ title, body_md: (body.body_md as string) ?? '', task_id: taskId, source: 'app' })
+          .insert({ title, body_md: str(body.body_md, MAX_TEXT) ?? '', task_id: taskId, source: 'app' })
           .select('*')
           .single();
         if (error) throw error;
@@ -264,15 +290,14 @@ Deno.serve(async (req: Request) => {
 
       case 'propose_task': {
         if (!has('propose_task')) return err('Missing permission: propose_task', 403);
-        const title = body.title as string;
-        if (!title) return err('Missing title');
+        const title = requiredStr(body.title, MAX_TITLE, 'title');
         const { data: task, error } = await admin
           .from('tasks')
           .insert({
             title,
-            description: (body.description as string) ?? null,
+            description: str(body.description, MAX_TEXT),
             priority: (['urgent', 'high', 'normal', 'low'].includes(body.priority) ? body.priority : 'normal') as string,
-            due_date: (body.due_date as string) ?? null,
+            due_date: str(body.due_date, 10),
             origin: 'agent',
             status: 'backlog',
           })
@@ -287,7 +312,8 @@ Deno.serve(async (req: Request) => {
         return err(`Unknown action: ${action}`);
     }
   } catch (e) {
-    console.error('agent-api error', e);
-    return err(e instanceof Error ? e.message : 'Internal error', 500);
+    // Validation failures carry a caller-safe message; everything else is opaque.
+    if (e instanceof ValidationError) return err(e.message, 400);
+    return dbErr(e, 'agent-api error');
   }
 });
