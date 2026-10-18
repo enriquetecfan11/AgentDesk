@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { and, asc, desc, eq, ilike, inArray, isNull, lte, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, ilike, inArray, isNull, lte, ne, sql } from 'drizzle-orm';
 
 import { db } from '@/lib/db/client';
 import {
@@ -11,7 +11,9 @@ import {
   type TaskPriority,
   type TaskStatus,
 } from '@/lib/db/schema';
+import { todayIso } from '@/lib/dates';
 import { serializeTask } from '@/lib/domain/serialize';
+import { firstOccurrence, nextOccurrence, parseRecurrence } from '@/lib/recurrence';
 import type { LabelRef, ProjectRef, TaskDTO } from '@/lib/types';
 import type { TaskCreateInput, TaskUpdateInput } from '@/lib/validation';
 
@@ -59,6 +61,7 @@ export async function listTasks(filters: TaskFilters = {}): Promise<TaskDTO[]> {
   if (filters.rootOnly) conditions.push(isNull(tasks.parentTaskId));
   if (filters.dueDate) conditions.push(eq(tasks.dueDate, filters.dueDate));
   if (filters.dueOnOrBefore) conditions.push(lte(tasks.dueDate, filters.dueOnOrBefore));
+  if (filters.dueOnOrAfter) conditions.push(gte(tasks.dueDate, filters.dueOnOrAfter));
   if (filters.search) conditions.push(ilike(tasks.title, `%${filters.search}%`));
   if (filters.inboxOnly) {
     conditions.push(isNull(tasks.projectId));
@@ -214,6 +217,11 @@ export async function nextSortOrder(status: TaskStatus, projectId: string | null
 export async function createTask(input: TaskCreateInput): Promise<TaskDTO> {
   const sortOrder = await nextSortOrder(input.status, input.projectId ?? null);
 
+  // A recurring task with no date would never surface in Today or Upcoming, so
+  // it is anchored to its first occurrence.
+  const rule = parseRecurrence(input.recurrence);
+  const dueDate = input.dueDate ?? (rule ? firstOccurrence(rule, todayIso()) : null);
+
   const [row] = await db
     .insert(tasks)
     .values({
@@ -225,8 +233,9 @@ export async function createTask(input: TaskCreateInput): Promise<TaskDTO> {
       parentTaskId: input.parentTaskId ?? null,
       assigneeType: input.assigneeType ?? null,
       assigneeId: input.assigneeId ?? null,
-      dueDate: input.dueDate ?? null,
+      dueDate,
       dueTime: input.dueTime ?? null,
+      recurrence: input.recurrence ?? null,
       sortOrder,
       completedAt: input.status === 'done' ? new Date() : null,
     })
@@ -239,11 +248,24 @@ export async function createTask(input: TaskCreateInput): Promise<TaskDTO> {
   return (await getTask(row.id))!;
 }
 
-export async function updateTask(id: string, input: TaskUpdateInput): Promise<TaskDTO | null> {
+export type TaskUpdateResult = {
+  task: TaskDTO;
+  /**
+   * Set when the caller asked to complete a recurring task: instead of closing
+   * it, the same task was rolled forward to its next occurrence.
+   */
+  recurrenceAdvanced: { from: string | null; to: string } | null;
+};
+
+export async function updateTask(
+  id: string,
+  input: TaskUpdateInput,
+): Promise<TaskUpdateResult | null> {
   const [current] = await db.select().from(tasks).where(eq(tasks.id, id)).limit(1);
   if (!current) return null;
 
   const patch: Partial<typeof tasks.$inferInsert> = { updatedAt: new Date() };
+  let recurrenceAdvanced: TaskUpdateResult['recurrenceAdvanced'] = null;
 
   if (input.title !== undefined) patch.title = input.title;
   if (input.description !== undefined) patch.description = input.description ?? null;
@@ -253,17 +275,36 @@ export async function updateTask(id: string, input: TaskUpdateInput): Promise<Ta
   if (input.assigneeId !== undefined) patch.assigneeId = input.assigneeId ?? null;
   if (input.dueDate !== undefined) patch.dueDate = input.dueDate ?? null;
   if (input.dueTime !== undefined) patch.dueTime = input.dueTime ?? null;
+  if (input.recurrence !== undefined) patch.recurrence = input.recurrence ?? null;
   if (input.sortOrder !== undefined) patch.sortOrder = input.sortOrder;
 
   if (input.status !== undefined) {
-    patch.status = input.status;
-    // Keep completedAt in sync with the status transitions.
-    if (input.status === 'done' && current.status !== 'done') patch.completedAt = new Date();
-    if (input.status !== 'done' && current.status === 'done') patch.completedAt = null;
+    const rule = parseRecurrence(current.recurrence);
+    const closing = input.status === 'done' && current.status !== 'done';
+
+    if (rule && closing) {
+      // Completing a repeating task means "done for this round": the task moves
+      // to its next occurrence and stays open, the way Todoist behaves. The
+      // activity log keeps the record of the round that was finished.
+      const from = current.dueDate ?? todayIso();
+      const to = nextOccurrence(rule, from, todayIso());
+
+      patch.status = 'todo';
+      patch.completedAt = null;
+      if (input.dueDate === undefined) patch.dueDate = to;
+      recurrenceAdvanced = { from: current.dueDate, to };
+    } else {
+      patch.status = input.status;
+      // Keep completedAt in sync with the status transitions.
+      if (input.status === 'done' && current.status !== 'done') patch.completedAt = new Date();
+      if (input.status !== 'done' && current.status === 'done') patch.completedAt = null;
+    }
   }
 
   const [row] = await db.update(tasks).set(patch).where(eq(tasks.id, id)).returning();
-  return row ? getTask(id) : null;
+  if (!row) return null;
+
+  return { task: (await getTask(id))!, recurrenceAdvanced };
 }
 
 export async function deleteTask(id: string): Promise<boolean> {

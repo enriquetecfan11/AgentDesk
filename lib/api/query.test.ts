@@ -41,4 +41,14 @@ describe('taskFiltersFromUrl', () => {
     expect(filters.rootOnly).toBe(true);
     expect(filters.inboxOnly).toBe(true);
   });
+
+  it('reads the date window, ignoring malformed dates', () => {
+    const filters = taskFiltersFromUrl(`${base}?dueBefore=2026-01-31&dueAfter=2026-01-01`);
+    expect(filters.dueOnOrBefore).toBe('2026-01-31');
+    expect(filters.dueOnOrAfter).toBe('2026-01-01');
+
+    const malformed = taskFiltersFromUrl(`${base}?dueBefore=31/01/2026&dueAfter=ayer`);
+    expect(malformed.dueOnOrBefore).toBeUndefined();
+    expect(malformed.dueOnOrAfter).toBeUndefined();
+  });
 });

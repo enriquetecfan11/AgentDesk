@@ -38,6 +38,13 @@ export function taskFiltersFromUrl(url: string): TaskFilters {
   const search = params.get('q');
   if (search) filters.search = search;
 
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/;
+  const dueBefore = params.get('dueBefore');
+  if (dueBefore && dateOnly.test(dueBefore)) filters.dueOnOrBefore = dueBefore;
+
+  const dueAfter = params.get('dueAfter');
+  if (dueAfter && dateOnly.test(dueAfter)) filters.dueOnOrAfter = dueAfter;
+
   if (params.get('rootOnly') === '1') filters.rootOnly = true;
   if (params.get('inbox') === '1') filters.inboxOnly = true;
 

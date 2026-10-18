@@ -43,8 +43,9 @@ export async function PATCH(request: Request, { params }: Context) {
     if (!parsed.success) throw new HttpError(422, 'Datos inválidos', parsed.error.issues);
     const input = parsed.data;
 
-    const task = await updateTask(id, input);
-    if (!task) throw new HttpError(404, 'Tarea no encontrada');
+    const result = await updateTask(id, input);
+    if (!result) throw new HttpError(404, 'Tarea no encontrada');
+    const { task, recurrenceAdvanced } = result;
 
     const labelsParsed = taskLabelsSchema.safeParse(raw);
     if (labelsParsed.success) await setTaskLabels(id, labelsParsed.data.labelIds);
@@ -53,15 +54,21 @@ export async function PATCH(request: Request, { params }: Context) {
 
     await logActivity({
       actor: { type: 'human', id: user.id, name: user.name },
-      action: statusChanged ? 'task.status_changed' : 'task.updated',
+      action: recurrenceAdvanced
+        ? 'task.recurred'
+        : statusChanged
+          ? 'task.status_changed'
+          : 'task.updated',
       entityType: 'task',
       entityId: task.id,
-      meta: statusChanged
-        ? { from: before.status, to: task.status, title: task.title }
-        : { fields: Object.keys(input), title: task.title },
+      meta: recurrenceAdvanced
+        ? { title: task.title, from: recurrenceAdvanced.from, to: recurrenceAdvanced.to }
+        : statusChanged
+          ? { from: before.status, to: task.status, title: task.title }
+          : { fields: Object.keys(input), title: task.title },
     });
 
-    return json({ task: await getTask(task.id) });
+    return json({ task: await getTask(task.id), recurrenceAdvanced });
   });
 }
 

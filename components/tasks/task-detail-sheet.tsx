@@ -10,6 +10,7 @@ import {
   LabelPicker,
   PrioritySelect,
   ProjectSelect,
+  RecurrenceField,
   StatusSelect,
 } from '@/components/tasks/task-fields';
 import { StatusIcon } from '@/components/tasks/task-icons';
@@ -180,6 +181,13 @@ export function TaskDetailSheet({
                   date={task.dueDate}
                   time={task.dueTime}
                   onChange={(next) => onUpdate(task.id, next)}
+                />
+              </FieldRow>
+
+              <FieldRow label="Repetición">
+                <RecurrenceField
+                  value={task.recurrence}
+                  onChange={(value) => onUpdate(task.id, { recurrence: value })}
                 />
               </FieldRow>
 

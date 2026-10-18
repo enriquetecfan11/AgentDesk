@@ -81,6 +81,33 @@ export function TasksView({
     setLabels(initialLabels);
   }, [initialLabels]);
 
+  /**
+   * Deep link from the command palette: `/tasks?tarea=<id>`.
+   *
+   * Runs once on mount and reads the query from `window` rather than
+   * `useSearchParams`, which keeps the page free of a Suspense boundary. The
+   * parameter is cleared afterwards so a manual reload does not reopen the
+   * panel.
+   */
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('tarea');
+    if (!id) return;
+
+    const local = tasks.find((task) => task.id === id);
+    if (local) {
+      setSelected(local);
+    } else {
+      // Subtasks and filtered-out tasks are not in the loaded page.
+      api
+        .get<{ task: TaskDTO }>(`/api/tasks/${id}`)
+        .then(({ task }) => setSelected(task))
+        .catch(() => undefined);
+    }
+
+    window.history.replaceState(null, '', '/tasks');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only
+  }, []);
+
   // The sheet must reflect edits made anywhere else (board, list, optimistic).
   useEffect(() => {
     setSelected((current) =>

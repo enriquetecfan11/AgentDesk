@@ -1,13 +1,29 @@
 'use client';
 
-import { CalendarDays, ListTree, Trash2 } from 'lucide-react';
+import { CalendarDays, ListTree, Repeat, Trash2 } from 'lucide-react';
 
 import { PriorityIcon, StatusIcon } from '@/components/tasks/task-icons';
 import { Button } from '@/components/ui/button';
 import { TASK_STATUS_META } from '@/lib/constants';
 import { formatDueLabel, isOverdue } from '@/lib/dates';
+import { describeRecurrence, parseRecurrence } from '@/lib/recurrence';
 import type { TaskDTO } from '@/lib/types';
 import { cn } from '@/lib/utils';
+
+/** Small "repeats" marker, with the rule spelled out on hover. */
+function RecurrenceBadge({ rule }: { rule: string }) {
+  const parsed = parseRecurrence(rule);
+
+  return (
+    <span
+      className="hidden shrink-0 items-center text-muted-foreground sm:inline-flex"
+      title={parsed ? `Se repite: ${describeRecurrence(parsed)}` : 'Se repite'}
+    >
+      <Repeat className="size-3.5" />
+      <span className="sr-only">Se repite</span>
+    </span>
+  );
+}
 
 export function TaskRow({
   task,
@@ -63,6 +79,8 @@ export function TaskRow({
             {task.subtaskDone}/{task.subtaskTotal}
           </span>
         )}
+
+        {task.recurrence && <RecurrenceBadge rule={task.recurrence} />}
 
         <span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
           {task.labels.slice(0, 3).map((label) => (

@@ -1,7 +1,7 @@
 'use client';
 
 import { Check, Plus, X } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { PriorityIcon, StatusIcon } from '@/components/tasks/task-icons';
 import { Button } from '@/components/ui/button';
@@ -21,6 +21,7 @@ import {
   TASK_STATUS_META,
 } from '@/lib/constants';
 import type { TaskPriorityValue, TaskStatusValue } from '@/lib/constants';
+import { describeRecurrence, parseRecurrence } from '@/lib/recurrence';
 import type { LabelDTO, ProjectDTO } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -246,6 +247,54 @@ export function LabelPicker({
         )}
       </PopoverContent>
     </Popover>
+  );
+}
+
+const RECURRENCE_PRESETS = [
+  { value: NONE, label: 'No se repite' },
+  { value: 'FREQ=DAILY', label: 'Todos los días' },
+  { value: 'FREQ=WEEKLY', label: 'Todas las semanas' },
+  { value: 'FREQ=MONTHLY', label: 'Todos los meses' },
+  { value: 'FREQ=YEARLY', label: 'Todos los años' },
+];
+
+/**
+ * Recurrence picker.
+ *
+ * The stored value is an RRULE fragment, so a rule typed by quick capture
+ * (`cada lunes y jueves`) is not one of the presets. In that case it is shown
+ * as its own entry, described in words, instead of being silently reset when
+ * the panel opens.
+ */
+export function RecurrenceField({
+  value,
+  onChange,
+}: {
+  value: string | null;
+  onChange: (value: string | null) => void;
+}) {
+  const options = useMemo(() => {
+    const base = [...RECURRENCE_PRESETS];
+    if (value && !base.some((option) => option.value === value)) {
+      const rule = parseRecurrence(value);
+      base.splice(1, 0, { value, label: rule ? describeRecurrence(rule) : value });
+    }
+    return base;
+  }, [value]);
+
+  return (
+    <Select value={value ?? NONE} onValueChange={(next) => onChange(next === NONE ? null : next)}>
+      <SelectTrigger className="h-8 gap-2 text-xs" aria-label="Repetición">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value} className="text-xs">
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 

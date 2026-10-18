@@ -35,14 +35,23 @@ ok()   { PASS=$((PASS + 1)); printf '  \033[32m✓\033[0m %s\n' "$1"; }
 bad()  { FAIL=$((FAIL + 1)); printf '  \033[31m✗\033[0m %s\n' "$1"; }
 step() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
-# jget '<clave>.<subclave>'  → lee JSON de stdin
+# jget '<clave>.<subclave>'  → lee JSON de stdin (devuelve '' si no existe)
 jget() {
   python3 -c "
 import json, sys
+
 node = json.load(sys.stdin)
+
 for part in '$1'.split('.'):
-    node = node[int(part)] if part.isdigit() else node[part]
-print(node if node is not None else '')
+    if isinstance(node, list):
+        index = int(part) if part.isdigit() else -1
+        node = node[index] if 0 <= index < len(node) else ''
+    elif isinstance(node, dict):
+        node = node.get(part, '')
+    else:
+        node = ''
+
+print('' if node is None else node)
 "
 }
 
@@ -150,12 +159,118 @@ code="$(status -b "$JAR" "$BASE/api/tasks/no-es-un-uuid")"
 [ "$code" = "404" ] && ok "id con formato inválido → 404" || bad "id inválido → $code (esperado 404)"
 
 # ---------------------------------------------------------------------------
-step "6. Limpieza"
+step "6. Captura rápida y recurrencias"
+# ---------------------------------------------------------------------------
+TODAY="$(python3 -c 'import datetime; print(datetime.date.today())')"
+TOMORROW="$(python3 -c 'import datetime; print(datetime.date.today() + datetime.timedelta(days=1))')"
+
+# Lenguaje natural, proyecto por identificador y etiqueta nueva.
+capture_json="$(curl -fsS -b "$JAR" -X POST "$BASE/api/capture" \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"revisar CVEs mañana 10:00 p1 #smk @captura"}')"
+CAPTURED_ID="$(printf '%s' "$capture_json" | jget task.id)"
+CAPTURED_LABEL_ID="$(printf '%s' "$capture_json" | jget task.labels.0.id)"
+
+[ "$(printf '%s' "$capture_json" | jget capture.title)" = "revisar CVEs" ] \
+  && ok "el título deja fuera los modificadores" || bad "el título quedó mal"
+[ "$(printf '%s' "$capture_json" | jget task.dueDate)" = "$TOMORROW" ] \
+  && ok "«mañana» se resuelve a $TOMORROW" || bad "la fecha relativa falló"
+# El driver devuelve `time` con segundos ("10:00:00"): basta con el prefijo.
+case "$(printf '%s' "$capture_json" | jget task.dueTime)" in
+  10:00*) ok "la hora se conserva (10:00)" ;;
+  *) bad "la hora se perdió" ;;
+esac
+[ "$(printf '%s' "$capture_json" | jget task.priority)" = "urgent" ] \
+  && ok "«p1» es prioridad urgente" || bad "la prioridad no se aplicó"
+[ "$(printf '%s' "$capture_json" | jget task.project.name)" = "Smoke Test" ] \
+  && ok "«#smk» resuelve el proyecto por identificador" || bad "el proyecto no se resolvió"
+[ "$(printf '%s' "$capture_json" | jget task.labels.0.name)" = "captura" ] \
+  && ok "«@captura» crea la etiqueta al vuelo" || bad "la etiqueta no se creó"
+[ "$(printf '%s' "$capture_json" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["notes"]))')" = "0" ] \
+  && ok "sin avisos cuando todo se entiende" || bad "aparecieron avisos inesperados"
+
+# Un proyecto que no existe no se inventa: se avisa y la tarea se guarda suelta.
+notes_json="$(curl -fsS -b "$JAR" -X POST "$BASE/api/capture" \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"revisar algo #proyecto-que-no-existe"}')"
+ORPHAN_ID="$(printf '%s' "$notes_json" | jget task.id)"
+[ "$(printf '%s' "$notes_json" | jget task.projectId)" = "" ] \
+  && ok "proyecto desconocido → tarea sin proyecto" || bad "se asignó un proyecto inexistente"
+[ "$(python3 -c 'import json,sys; print(len(json.load(sys.stdin)["notes"]))' <<< "$notes_json")" = "1" ] \
+  && ok "se avisa del proyecto desconocido" || bad "no se avisó del proyecto desconocido"
+
+# El Inbox es exactamente lo que no tiene proyecto ni fecha.
+[ "$(curl -fsS -b "$JAR" "$BASE/api/tasks?inbox=1" | python3 -c "
+import json, sys
+ids = [task['id'] for task in json.load(sys.stdin)['tasks']]
+print('si' if '$ORPHAN_ID' in ids else 'no')
+")" = "si" ] \
+  && ok "la tarea sin proyecto aparece en el Inbox" || bad "el Inbox no la incluye"
+
+# Al completar una tarea recurrente, avanza en lugar de cerrarse.
+recurring_json="$(curl -fsS -b "$JAR" -X POST "$BASE/api/tasks" \
+  -H 'Content-Type: application/json' \
+  -d "{\"title\":\"Tarea recurrente\",\"dueDate\":\"$TODAY\",\"recurrence\":\"FREQ=DAILY\"}")"
+RECURRING_ID="$(printf '%s' "$recurring_json" | jget task.id)"
+
+advanced_json="$(curl -fsS -b "$JAR" -X PATCH "$BASE/api/tasks/$RECURRING_ID" \
+  -H 'Content-Type: application/json' -d '{"status":"done"}')"
+[ "$(printf '%s' "$advanced_json" | jget task.status)" = "todo" ] \
+  && ok "recurrente: sigue abierta tras completarla" || bad "la recurrente se cerró"
+[ "$(printf '%s' "$advanced_json" | jget task.dueDate)" = "$TOMORROW" ] \
+  && ok "recurrente: avanza a $TOMORROW" || bad "la recurrente no avanzó"
+[ "$(printf '%s' "$advanced_json" | jget recurrenceAdvanced.to)" = "$TOMORROW" ] \
+  && ok "la API informa del avance" || bad "no se informó del avance"
+[ -z "$(printf '%s' "$advanced_json" | jget task.completedAt)" ] \
+  && ok "recurrente: completedAt queda vacío" || bad "la recurrente quedó marcada como completada"
+
+# Una tarea normal sí se cierra.
+plain_json="$(curl -fsS -b "$JAR" -X POST "$BASE/api/tasks" \
+  -H 'Content-Type: application/json' -d '{"title":"Tarea normal"}')"
+PLAIN_ID="$(printf '%s' "$plain_json" | jget task.id)"
+[ -n "$(curl -fsS -b "$JAR" -X PATCH "$BASE/api/tasks/$PLAIN_ID" \
+  -H 'Content-Type: application/json' -d '{"status":"done"}' | jget task.completedAt)" ] \
+  && ok "una tarea sin recurrencia se cierra con completedAt" || bad "completedAt no se rellenó"
+
+# Una regla inválida se rechaza en la puerta, no más tarde.
+code="$(status -b "$JAR" -X POST "$BASE/api/tasks" -H 'Content-Type: application/json' \
+  -d '{"title":"x","recurrence":"FREQ=CADA_LUNA"}')"
+[ "$code" = "422" ] && ok "recurrencia inválida → 422" || bad "recurrencia inválida → $code (esperado 422)"
+
+# ---------------------------------------------------------------------------
+step "7. Búsqueda"
+# ---------------------------------------------------------------------------
+search_json="$(curl -fsS -b "$JAR" "$BASE/api/search?q=revisar%20CVEs")"
+[ "$(printf '%s' "$search_json" | jget tasks.0.id)" = "$CAPTURED_ID" ] \
+  && ok "la búsqueda encuentra la tarea capturada" || bad "la búsqueda no la encontró"
+
+project_json="$(curl -fsS -b "$JAR" "$BASE/api/search?q=Smoke")"
+[ "$(printf '%s' "$project_json" | jget projects.0.name)" = "Smoke Test" ] \
+  && ok "la búsqueda encuentra el proyecto" || bad "la búsqueda no encontró el proyecto"
+
+[ "$(curl -fsS -b "$JAR" "$BASE/api/search?q=a" | jget tasks.0.id)" = "" ] \
+  && ok "una letra no dispara búsquedas" || bad "la búsqueda se ejecutó con una sola letra"
+
+# ---------------------------------------------------------------------------
+step "8. Páginas nuevas"
+# ---------------------------------------------------------------------------
+for route in /inbox /today /upcoming; do
+  http="$(status -b "$JAR" "$BASE$route")"
+  [ "$http" = "200" ] && ok "$route responde 200" || bad "$route responde $http"
+done
+
+# ---------------------------------------------------------------------------
+step "9. Limpieza"
 # ---------------------------------------------------------------------------
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$SUBTASK_ID" > /dev/null && ok "subtarea eliminada"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$TASK_ID" > /dev/null && ok "tarea eliminada"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$CAPTURED_ID" > /dev/null && ok "captura eliminada"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$ORPHAN_ID" > /dev/null && ok "huérfana eliminada"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$RECURRING_ID" > /dev/null && ok "recurrente eliminada"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$PLAIN_ID" > /dev/null && ok "tarea normal eliminada"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/projects/$PROJECT_ID" > /dev/null && ok "proyecto eliminado"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/labels/$LABEL_ID" > /dev/null && ok "etiqueta eliminada"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/labels/$CAPTURED_LABEL_ID" > /dev/null && ok "etiqueta de captura eliminada"
 
 # ---------------------------------------------------------------------------
 printf '\n\033[1mResultado:\033[0m %d correctas, %d fallidas\n' "$PASS" "$FAIL"

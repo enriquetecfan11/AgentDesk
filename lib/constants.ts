@@ -23,6 +23,14 @@ export const TASK_STATUSES = [
 
 export type TaskStatusValue = (typeof TASK_STATUSES)[number];
 
+/** Statuses that count as "still open", used by Hoy, Próximas and the badges. */
+export const OPEN_TASK_STATUSES: TaskStatusValue[] = [
+  'backlog',
+  'todo',
+  'in_progress',
+  'review',
+];
+
 /** Column order for the board. */
 export const BOARD_STATUSES: TaskStatusValue[] = [
   'backlog',

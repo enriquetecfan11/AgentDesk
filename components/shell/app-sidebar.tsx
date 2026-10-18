@@ -34,9 +34,9 @@ type NavItem = {
 const NAV_GROUPS: { items: NavItem[] }[] = [
   {
     items: [
-      { href: '/inbox', label: 'Inbox', icon: Inbox, pending: true },
-      { href: '/today', label: 'Hoy', icon: CalendarCheck, pending: true },
-      { href: '/upcoming', label: 'Próximas', icon: CalendarDays, pending: true },
+      { href: '/inbox', label: 'Inbox', icon: Inbox },
+      { href: '/today', label: 'Hoy', icon: CalendarCheck },
+      { href: '/upcoming', label: 'Próximas', icon: CalendarDays },
     ],
   },
   {

@@ -16,6 +16,7 @@ export type TaskPatch = {
   projectId?: string | null;
   dueDate?: string | null;
   dueTime?: string | null;
+  recurrence?: string | null;
   sortOrder?: number;
   labelIds?: string[];
 };
@@ -57,9 +58,20 @@ export function useTasks(initialTasks: TaskDTO[]) {
       }
 
       try {
-        const { task } = await api.patch<{ task: TaskDTO }>(`/api/tasks/${id}`, patch);
+        const { task, recurrenceAdvanced } = await api.patch<{
+          task: TaskDTO;
+          recurrenceAdvanced: { from: string | null; to: string } | null;
+        }>(`/api/tasks/${id}`, patch);
+
         setTasks((previous) => previous.map((item) => (item.id === id ? task : item)));
-        if (!options.silent) toast.success('Tarea actualizada');
+
+        if (recurrenceAdvanced) {
+          // The task was not closed: it moved to its next occurrence.
+          toast.info(`Tarea recurrente: próxima el ${recurrenceAdvanced.to}`);
+        } else if (!options.silent) {
+          toast.success('Tarea actualizada');
+        }
+
         return task;
       } catch (error) {
         if (snapshot) {

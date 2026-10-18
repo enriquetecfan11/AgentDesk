@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@/lib/constants';
+import { parseRecurrence } from '@/lib/recurrence';
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -93,6 +94,20 @@ const timeOfDay = z
   .regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Formato esperado: HH:MM')
   .nullish();
 
+/**
+ * Stored as an RRULE fragment. Anything the engine cannot execute is rejected
+ * here rather than silently ignored when the task is completed.
+ */
+const recurrence = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .refine((value) => parseRecurrence(value) !== null, {
+    message: 'Regla de recurrencia no válida',
+  })
+  .nullish();
+
 export const taskCreateSchema = z.object({
   title: z.string().trim().min(1, 'El título es obligatorio').max(500),
   description: z.string().max(20000).nullish(),
@@ -104,6 +119,7 @@ export const taskCreateSchema = z.object({
   assigneeId: z.uuid().nullish(),
   dueDate: dateOnly,
   dueTime: timeOfDay,
+  recurrence,
   labelIds: z.array(z.uuid()).max(20).optional(),
 });
 
@@ -130,6 +146,16 @@ export const labelCreateSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Quick capture
+// ---------------------------------------------------------------------------
+
+export const captureSchema = z.object({
+  text: z.string().trim().min(1, 'Escribe algo que capturar').max(2000),
+  /** Used only when the text itself has no `#project`. */
+  projectId: z.uuid().nullish(),
+});
+
+// ---------------------------------------------------------------------------
 // Inferred input types
 // ---------------------------------------------------------------------------
 
@@ -140,5 +166,6 @@ export type ProjectUpdateInput = z.infer<typeof projectUpdateSchema>;
 export type TaskCreateInput = z.infer<typeof taskCreateSchema>;
 export type TaskUpdateInput = z.infer<typeof taskUpdateSchema>;
 export type LabelCreateInput = z.infer<typeof labelCreateSchema>;
+export type CaptureInput = z.infer<typeof captureSchema>;
 
 export { taskStatusSchema as taskStatus, taskPrioritySchema as taskPriority };
