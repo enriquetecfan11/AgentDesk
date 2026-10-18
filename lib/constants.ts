@@ -58,27 +58,27 @@ export const TASK_STATUS_META: Record<
   },
   in_progress: {
     label: 'En curso',
-    dot: 'bg-amber-500',
-    text: 'text-amber-600 dark:text-amber-500',
-    ring: 'ring-amber-500/30',
+    dot: 'bg-accent',
+    text: 'text-accent',
+    ring: 'ring-accent/30',
   },
   review: {
-    label: 'Revisión',
-    dot: 'bg-violet-500',
-    text: 'text-violet-600 dark:text-violet-400',
-    ring: 'ring-violet-500/30',
+    label: 'Necesita aprobación',
+    dot: 'bg-accent',
+    text: 'text-accent',
+    ring: 'ring-accent/30',
   },
   done: {
     label: 'Hecho',
-    dot: 'bg-emerald-500',
-    text: 'text-emerald-600 dark:text-emerald-500',
-    ring: 'ring-emerald-500/30',
+    dot: 'bg-accent',
+    text: 'text-accent',
+    ring: 'ring-accent/30',
   },
   cancelled: {
     label: 'Cancelado',
     dot: 'bg-zinc-300 dark:bg-zinc-600',
-    text: 'text-muted-foreground line-through',
-    ring: 'ring-zinc-400/20',
+    text: 'text-accent line-through',
+    ring: 'ring-accent/20',
   },
 };
 
@@ -222,3 +222,80 @@ export const RUN_LOG_LEVEL_META: Record<RunLogLevelValue, { label: string; text:
 
 export const ARTIFACT_KINDS = ['file', 'text', 'url'] as const;
 export type ArtifactKindValue = (typeof ARTIFACT_KINDS)[number];
+
+// ---------------------------------------------------------------------------
+// Autonomy, risk and approvals
+// ---------------------------------------------------------------------------
+
+export const TASK_AUTONOMIES = [
+  'suggest_only',
+  'do_with_approval',
+  'autonomous_low_risk',
+] as const;
+export type TaskAutonomyValue = (typeof TASK_AUTONOMIES)[number];
+
+export const TASK_AUTONOMY_META: Record<
+  TaskAutonomyValue,
+  { label: string; hint: string; dot: string; text: string }
+> = {
+  suggest_only: {
+    label: 'Solo propone',
+    hint: 'Puede leer, comentar y proponer. Cualquier cambio pasa por ti.',
+    dot: 'bg-sky-500',
+    text: 'text-sky-600 dark:text-sky-400',
+  },
+  do_with_approval: {
+    label: 'Trabaja y pide permiso',
+    hint: 'Avanza la tarea, pero delegar, ejecutar, enviar o borrar espera tu visto bueno.',
+    dot: 'bg-amber-500',
+    text: 'text-amber-600 dark:text-amber-500',
+  },
+  autonomous_low_risk: {
+    label: 'Autónomo en lo de bajo riesgo',
+    hint: 'También crea subtareas sin avisar. Lo que sale de AgentDesk sigue pidiendo permiso.',
+    dot: 'bg-emerald-500',
+    text: 'text-emerald-600 dark:text-emerald-500',
+  },
+};
+
+export const RISK_LEVELS = ['low', 'medium', 'high'] as const;
+export type RiskLevelValue = (typeof RISK_LEVELS)[number];
+
+export const RISK_META: Record<RiskLevelValue, { label: string; dot: string; text: string }> = {
+  low: { label: 'Bajo', dot: 'bg-zinc-400', text: 'text-muted-foreground' },
+  medium: { label: 'Medio', dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-500' },
+  high: { label: 'Alto', dot: 'bg-red-500', text: 'text-red-600 dark:text-red-400' },
+};
+
+export const APPROVAL_STATUSES = [
+  'pending',
+  'approved',
+  'rejected',
+  'expired',
+  'cancelled',
+] as const;
+export type ApprovalStatusValue = (typeof APPROVAL_STATUSES)[number];
+
+export const APPROVAL_STATUS_META: Record<
+  ApprovalStatusValue,
+  { label: string; dot: string; text: string }
+> = {
+  pending: { label: 'Esperando', dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-500' },
+  approved: {
+    label: 'Aprobada',
+    dot: 'bg-emerald-500',
+    text: 'text-emerald-600 dark:text-emerald-500',
+  },
+  rejected: { label: 'Rechazada', dot: 'bg-red-500', text: 'text-red-600 dark:text-red-400' },
+  // Caducada se lee como rechazada: se pinta con el mismo peso, no como un
+  // estado neutro, porque sus consecuencias son las de un "no".
+  expired: { label: 'Caducada', dot: 'bg-red-400', text: 'text-red-600 dark:text-red-400' },
+  cancelled: {
+    label: 'Cancelada',
+    dot: 'bg-zinc-300 dark:bg-zinc-600',
+    text: 'text-muted-foreground',
+  },
+};
+
+/** Approvals that are still waiting for a person. */
+export const OPEN_APPROVAL_STATUSES: ApprovalStatusValue[] = ['pending'];

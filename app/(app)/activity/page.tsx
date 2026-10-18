@@ -8,6 +8,7 @@ import {
   NotebookPen,
   PlayCircle,
   Send,
+  ShieldCheck,
   Tag,
   Trash2,
   UserRound,
@@ -34,6 +35,17 @@ const ACTION_LABELS: Record<string, string> = {
   'task.recurred': 'reprogramó la tarea',
   'task.deleted': 'eliminó la tarea',
   'task.comment': 'comentó en la tarea',
+  'task.claimed': 'tomó la tarea',
+  'task.completed': 'cerró la tarea',
+  'task.failed': 'no pudo terminar la tarea',
+  'task.lease_expired': 'soltó por caducidad el lease de',
+  'task.autonomy_changed': 'cambió la autonomía de',
+  'agent.notice': 'actuó con aviso en',
+  'approval.requested': 'pidió permiso para',
+  'approval.approved': 'aprobó',
+  'approval.rejected': 'rechazó',
+  'approval.expired': 'dejó caducar',
+  'approval.cancelled': 'canceló la petición',
   'label.created': 'creó la etiqueta',
   'note.created': 'escribió la nota',
   'note.updated': 'actualizó la nota',
@@ -68,8 +80,11 @@ function iconFor(entry: ActivityDTO) {
   if (entry.action.startsWith('task.')) return ListChecks;
   if (entry.action.startsWith('label.')) return Tag;
   if (entry.action.startsWith('note.')) return NotebookPen;
+  // Before the `agent.` family: the exact match has to win over the prefix.
+  if (entry.action === 'agent.notice') return ShieldCheck;
   if (entry.action.startsWith('agent.')) return Bot;
   if (entry.action.startsWith('delegation.')) return Send;
+  if (entry.action.startsWith('approval.')) return ShieldCheck;
   if (entry.action.startsWith('run.')) return PlayCircle;
   if (entry.action.startsWith('artifact.')) return FileText;
   if (entry.action === 'user.signed_in') return LogIn;
@@ -88,8 +103,10 @@ function detailFor(entry: ActivityDTO): string | null {
   if (entry.action.startsWith('task.')) return title;
   if (entry.action.startsWith('project.') || entry.action.startsWith('label.')) return name;
   if (entry.action.startsWith('note.')) return title;
+  if (entry.action === 'agent.notice') return title;
   if (entry.action.startsWith('agent.')) return name;
   if (entry.action.startsWith('delegation.')) return title;
+  if (entry.action.startsWith('approval.')) return title;
   if (entry.action.startsWith('run.')) return title;
   if (entry.action.startsWith('artifact.')) return name;
   return null;

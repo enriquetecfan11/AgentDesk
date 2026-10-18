@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
 import { api } from '@/lib/api-client';
-import type { TaskPriorityValue, TaskStatusValue } from '@/lib/constants';
+import type { TaskAutonomyValue, TaskPriorityValue, TaskStatusValue } from '@/lib/constants';
 import type { TaskDTO } from '@/lib/types';
 
 export type TaskPatch = {
@@ -19,6 +19,7 @@ export type TaskPatch = {
   recurrence?: string | null;
   sortOrder?: number;
   labelIds?: string[];
+  autonomy?: TaskAutonomyValue;
 };
 
 export type TaskCreatePayload = TaskPatch & {

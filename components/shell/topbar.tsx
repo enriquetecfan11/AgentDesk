@@ -14,6 +14,7 @@ const TITLES: { match: string; title: string }[] = [
   { match: '/tasks', title: 'Tareas' },
   { match: '/projects', title: 'Proyectos' },
   { match: '/notes', title: 'Notas' },
+  { match: '/approvals', title: 'Aprobaciones' },
   { match: '/activity', title: 'Actividad' },
   { match: '/agents', title: 'Agentes' },
   { match: '/runs', title: 'Runs' },

@@ -36,10 +36,13 @@ Los endpoints de la izquierda exigen **sesión de usuario** (cookie `ad_session`
 | `GET` | `/api/runs/:id` | Run con sus logs y artefactos |
 | `GET` | `/api/events` | Flujo SSE de la UI: tareas, runs y actividad en vivo |
 | `GET` | `/api/artifacts/:id` | Descargar un artefacto (sesión **o** token con `runs:read`) |
+| `GET` | `/api/approvals` | Bandeja de aprobaciones (`?status=`, `?taskId=`, `?agentId=`) |
+| `GET` `PATCH` | `/api/approvals/:id` | Leer; aprobar (con argumentos editados), rechazar con motivo o cancelar |
 | `GET` `POST` | `/api/webhooks` | Listar / crear salidas (`POST` devuelve el secreto una vez) |
 | `GET` `PATCH` `DELETE` | `/api/webhooks/:id` | Leer, editar (`rotateSecret`), borrar |
 | `POST` | `/api/webhooks/:id/test` | Entrega un evento `test` y devuelve la respuesta del receptor |
 | `GET` | `/api/openapi.json` | Especificación OpenAPI 3.1 de la API de agentes (pública) |
+| `POST` | `/api/mcp` | Servidor MCP (token de agente). Ver [Integraciones](integraciones.md) |
 
 Filtros de `GET /api/tasks`, todos opcionales:
 
@@ -56,6 +59,20 @@ Filtros de `GET /api/tasks`, todos opcionales:
 | `inbox` | `?inbox=1` | Sin proyecto y sin fecha |
 | `order` | `?order=dueDate` | `manual`, `dueDate`, `priority`, `created` |
 
+Una tarea lleva además unos campos que solo importan cuando trabaja un agente, y que salen en
+todas las respuestas:
+
+| Campo | Qué es |
+|---|---|
+| `autonomy` | `suggest_only`, `do_with_approval` (por defecto) o `autonomous_low_risk` |
+| `claimedByAgentId`, `claimedByAgentName` | Quién tiene el *lease*, si lo tiene alguien |
+| `leaseExpiresAt`, `leaseSecondsLeft` | Cuándo caduca la reserva |
+| `heartbeatAt` | Última señal de vida del agente |
+| `claimCount` | Veces que se ha reclamado. Un número alto delata un bucle |
+
+`autonomy` se puede mandar al crear (`POST /api/tasks`) y al editar (`PATCH /api/tasks/:id`).
+Se cambia también desde el panel de detalle de la tarea.
+
 Ejemplo completo:
 
 ```bash
@@ -64,6 +81,61 @@ curl -s -b cookies.txt 'http://192.168.1.50:3000/api/tasks?status=todo&order=due
 
 Los valores mal formados se descartan en lugar de devolver `422`: un enlace guardado
 antiguo debe seguir mostrando algo útil.
+
+---
+
+## Aprobaciones
+
+Una aprobación es **una acción que un agente quiso hacer y no puede hacer sola**. Se crea
+sola cuando el agente llama a una herramienta MCP que su autonomía no le permite, y se queda
+esperando en **Aprobaciones** hasta que la decidas.
+
+AgentDesk es la puerta, no el ejecutor: aprobar `shell.run` no ejecuta nada, le dice al agente
+—que está consultando `get_task`— que ya puede ejecutarlo él. La única acción que AgentDesk
+hace por sí misma es la que es suya de principio a fin: aprobar un `propose_delegation` crea la
+delegación de verdad.
+
+```bash
+# Lo que está esperando
+curl -s -b cookies.txt "$BASE/api/approvals?status=pending" | jq
+
+# Aprobar tal cual
+curl -s -b cookies.txt -X PATCH "$BASE/api/approvals/<id>" \
+  -H 'Content-Type: application/json' -d '{"action":"approve"}' | jq
+
+# Aprobar cambiando los argumentos (el agente usará payloadEdited, no los suyos)
+curl -s -b cookies.txt -X PATCH "$BASE/api/approvals/<id>" \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"approve","payload":{"cmd":"wazuh-control status"},"reason":"Solo consultar"}' | jq
+
+# Rechazar. El motivo es obligatorio: el agente lo recibe y actúa con él.
+curl -s -b cookies.txt -X PATCH "$BASE/api/approvals/<id>" \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"reject","reason":"No reinicies nada en horario laboral"}' | jq
+```
+
+Estados: `pending` → `approved` / `rejected` / `cancelled`, más `expired`.
+
+Las cuatro reglas, y dónde se cumplen de verdad:
+
+- **Falla cerrado.** `expires_at` es obligatorio y toda lectura barre antes lo vencido. Al agente
+  se le informa con un campo `decision`, y una aprobación caducada llega como `rejected`: nunca
+  tiene que saber que hubo un plazo, solo que la respuesta fue no.
+- **Una decisión no se sobrescribe.** Decidir es un `UPDATE … WHERE status = 'pending'`. La
+  segunda decisión no encaja con ninguna fila y la respuesta es `409` con el estado que sí vale,
+  incluido el caso de haberse quedado el diálogo abierto hasta que caducó.
+- **Un agente no aprueba lo suyo.** No hay ruta bajo `/api/v1` ni herramienta MCP que decida.
+  `decided_by_user_id` apunta a `users` y el único camino es `PATCH /api/approvals/:id` con
+  sesión.
+- **Un rechazo lleva motivo.** Sin él la respuesta es `422`: un rechazo que el agente no puede
+  interpretar es un agente que reintenta lo mismo y vuelve a chocar.
+
+El payload original **nunca se reescribe**. Si editas los argumentos, los tuyos van a
+`payloadEdited` y los del agente se quedan en `payload`, así que la bandeja siempre puede
+enseñar las dos cosas.
+
+Qué riesgo tiene cada herramienta y qué hace cada autonomía está en
+[Integraciones → Servidor MCP](integraciones.md#servidor-mcp).
 
 ---
 

@@ -1,11 +1,18 @@
 'use client';
 
-import { CornerDownLeft, Loader2 } from 'lucide-react';
+import { Bot, CornerDownLeft, FileText, ListTodo, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
 
 import { Textarea } from '@/components/ui/textarea';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { api } from '@/lib/api-client';
 import { hasCaptureDetail, parseCapture } from '@/lib/capture';
 import type { TaskDTO } from '@/lib/types';
@@ -39,6 +46,7 @@ export function CaptureBox({
   const router = useRouter();
   const [value, setValue] = useState('');
   const [saving, setSaving] = useState(false);
+  const [mode, setMode] = useState<'task' | 'note' | 'delegation'>('task');
   const inputId = useId();
 
   const capture = parseCapture(value);
@@ -47,6 +55,15 @@ export function CaptureBox({
   async function submit() {
     const text = value.trim();
     if (!text || saving) return;
+
+    if (mode === 'note') {
+      router.push('/notes');
+      return;
+    }
+    if (mode === 'delegation') {
+      router.push('/agents');
+      return;
+    }
 
     setSaving(true);
     try {
@@ -89,6 +106,31 @@ export function CaptureBox({
       />
 
       <div className="flex flex-wrap items-center gap-1.5 border-t border-border/70 px-3 py-1.5">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label="Elegir tipo de captura"
+              title="Elegir tipo de captura"
+            >
+              {mode === 'task' ? <ListTodo className="size-3.5" /> : mode === 'note' ? <FileText className="size-3.5" /> : <Bot className="size-3.5" />}
+              {mode === 'task' ? 'Tarea' : mode === 'note' ? 'Nota' : 'Encargo a agente'}
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-48">
+            <DropdownMenuLabel>Capturar como</DropdownMenuLabel>
+            <DropdownMenuItem onClick={() => setMode('task')} className="gap-2">
+              <ListTodo className="size-4" /> Tarea
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setMode('note')} className="gap-2">
+              <FileText className="size-4" /> Nota
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setMode('delegation')} className="gap-2">
+              <Bot className="size-4" /> Encargo a agente
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         {showsPreview ? (
           <>
             <span className="text-[11px] text-muted-foreground">Se entiende:</span>

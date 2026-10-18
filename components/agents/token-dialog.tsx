@@ -47,9 +47,11 @@ const DEFAULT_SCOPES: AgentScope[] = [
  */
 export function NewTokenDialog({
   agentId,
+  baseUrl,
   onCreated,
 }: {
   agentId: string;
+  baseUrl: string;
   onCreated: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -58,12 +60,14 @@ export function NewTokenDialog({
   const [secret, setSecret] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [mcpCopied, setMcpCopied] = useState<'config' | 'command' | null>(null);
 
   function reset() {
     setName('default');
     setScopes(DEFAULT_SCOPES);
     setSecret(null);
     setCopied(false);
+    setMcpCopied(null);
   }
 
   function toggleScope(scope: AgentScope, enabled: boolean) {
@@ -92,6 +96,33 @@ export function NewTokenDialog({
     } finally {
       setBusy(false);
     }
+  }
+
+  const mcpConfig = secret
+    ? JSON.stringify(
+        {
+          mcpServers: {
+            agentdesk: {
+              type: 'streamable-http',
+              url: `${baseUrl}/api/mcp`,
+              headers: {
+                Authorization: `Bearer ${secret}`,
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )
+    : '';
+  const mcpCommand = secret
+    ? `curl -N -X POST ${baseUrl}/api/mcp -H "Authorization: Bearer ${secret}" -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'`
+    : '';
+
+  async function copyMcp(value: string, kind: 'config' | 'command') {
+    const ok = await copyText(value);
+    setMcpCopied(ok ? kind : null);
+    toast[ok ? 'success' : 'error'](ok ? 'Configuración MCP copiada' : 'No se pudo copiar');
   }
 
   return (
@@ -224,6 +255,44 @@ export function NewTokenDialog({
                   Se guarda solo su hash, así que no hay forma de recuperarlo. Colócalo en el
                   <code className="font-mono"> .env</code> del agente, nunca en el repositorio.
                 </p>
+              </div>
+
+              <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+                <div>
+                  <p className="text-xs font-medium">Conectar por MCP</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    Pega este bloque en la configuración de tu cliente MCP y cambia solo la ruta del
+                    servidor si hace falta.
+                  </p>
+                </div>
+                <div className="relative">
+                  <pre className="max-h-48 overflow-auto rounded-md border border-border bg-background p-2 pr-16 text-[10px] leading-relaxed">
+                    <code className="font-mono">{mcpConfig}</code>
+                  </pre>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="absolute right-2 top-2 h-7 gap-1 px-2 text-[10px]"
+                    onClick={() => void copyMcp(mcpConfig, 'config')}
+                  >
+                    {mcpCopied === 'config' ? <Check className="size-3" /> : <Copy className="size-3" />}
+                    {mcpCopied === 'config' ? 'Copiado' : 'Copiar'}
+                  </Button>
+                </div>
+                <div className="relative">
+                  <pre className="overflow-x-auto rounded-md border border-border bg-background p-2 pr-16 text-[10px] leading-relaxed">
+                    <code className="font-mono">{mcpCommand}</code>
+                  </pre>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="absolute right-2 top-2 h-7 gap-1 px-2 text-[10px]"
+                    onClick={() => void copyMcp(mcpCommand, 'command')}
+                  >
+                    {mcpCopied === 'command' ? <Check className="size-3" /> : <Copy className="size-3" />}
+                    {mcpCopied === 'command' ? 'Copiado' : 'Copiar'}
+                  </Button>
+                </div>
               </div>
             </div>
 

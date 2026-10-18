@@ -30,7 +30,7 @@ export function StatusIcon({
       )}
     >
       {isDone && (
-        <span className="grid size-4 place-items-center rounded-full bg-emerald-500 text-white">
+        <span className="grid size-4 place-items-center rounded-full bg-accent text-accent-foreground">
           <Check className="size-3" strokeWidth={3} />
         </span>
       )}

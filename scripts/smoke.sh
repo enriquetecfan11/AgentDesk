@@ -642,25 +642,193 @@ printf '%s' "$spec" | grep -q '"/api/v1/queue"' \
 printf '%s' "$spec" | grep -q "$BASE" \
   && ok "los servers apuntan a APP_BASE_URL" || bad "el server de la especificación no cuadra"
 
-# Servidor MCP: un token nuevo para que pueda pedir la cola.
+# Servidor MCP en /api/mcp: un token nuevo para que pueda pedir la cola.
 mcp_token="$(curl -fsS -b "$JAR" -X POST "$BASE/api/agents/$AGENT_ID/tokens" \
   -H 'Content-Type: application/json' -d '{"name":"mcp","scopes":["delegations:read"]}' | jget secret)"
 
-node mcp/agentdesk-mcp.mjs --list | grep -q '^get_queue' \
-  && ok "el servidor MCP lista sus herramientas" || bad "el servidor MCP no lista nada"
+# mcp '<cuerpo jsonrpc>' → respuesta cruda, con el token del agente
+mcp() { curl -fsS -X POST "$BASE/api/mcp" -H "Authorization: Bearer $mcp_token" \
+  -H 'Content-Type: application/json' -d "$1"; }
 
-mcp_out="$(printf '%s\n%s\n%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}' \
-  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_queue","arguments":{}}}' \
-  | AGENTDESK_URL="$BASE" AGENTDESK_TOKEN="$mcp_token" node mcp/agentdesk-mcp.mjs 2>/dev/null || true)"
+hello="$(mcp '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}')"
+[ "$(printf '%s' "$hello" | jget result.serverInfo.name)" = "agentdesk" ] \
+  && ok "/api/mcp responde a initialize" || bad "/api/mcp no saludó"
 
-printf '%s' "$mcp_out" | grep -q '"name":"agentdesk"' \
-  && ok "el servidor MCP responde a initialize" || bad "el servidor MCP no saludó"
-# El contenido de la herramienta viaja como texto JSON, con las comillas
-# escapadas: se busca la palabra, no el literal entrecomillado.
-printf '%s' "$mcp_out" | grep -q 'delegations' \
-  && ok "el servidor MCP ejecuta get_queue contra la API" || bad "la herramienta MCP no llamó a la API"
+tools="$(mcp '{"jsonrpc":"2.0","id":2,"method":"tools/list"}')"
+for tool in get_next_task claim_task propose_delegation request_approval complete_task fail_task; do
+  printf '%s' "$tools" | grep -q "\"$tool\"" \
+    && ok "la herramienta $tool está publicada" || bad "falta la herramienta $tool"
+done
+# Las de siempre siguen ahí: mover el servidor no cambió lo que hace.
+for tool in whoami get_queue create_task update_task comment_task start_run finish_run; do
+  printf '%s' "$tools" | grep -q "\"$tool\"" \
+    || bad "se ha perdido la herramienta antigua $tool"
+done
+ok "las herramientas anteriores siguen publicadas"
+
+queue="$(mcp '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_queue","arguments":{}}}')"
+# El resultado de una herramienta viaja como texto JSON: se busca la palabra.
+printf '%s' "$queue" | grep -q 'delegations' \
+  && ok "una herramienta MCP llega al dominio" || bad "la herramienta MCP no devolvió nada"
+
+# Una notificación no se contesta: 202 y silencio.
+code="$(status -X POST "$BASE/api/mcp" -H "Authorization: Bearer $mcp_token" \
+  -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","method":"notifications/initialized"}')"
+[ "$code" = "202" ] && ok "una notificación MCP → 202 sin cuerpo" || bad "notificación MCP → $code (esperado 202)"
+
+code="$(status -X POST "$BASE/api/mcp" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"ping"}')"
+[ "$code" = "401" ] && ok "/api/mcp sin token → 401" || bad "/api/mcp sin token → $code (esperado 401)"
+
+# Un método que no existe es un error de protocolo…
+bad_method="$(mcp '{"jsonrpc":"2.0","id":4,"method":"resources/list"}')"
+[ "$(printf '%s' "$bad_method" | jget error.code)" = "-32601" ] \
+  && ok "un método desconocido → -32601" || bad "un método desconocido no dio -32601"
+
+# …pero un fallo de herramienta no: viaja como resultado con isError, para que
+# el modelo pueda leerlo en lugar de que el cliente cuelgue la sesión.
+no_scope="$(mcp '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"create_note","arguments":{"title":"no"}}}')"
+[ "$(printf '%s' "$no_scope" | jget result.isError)" = "True" ] \
+  && ok "un scope que falta llega como isError, no como error de protocolo" \
+  || bad "un scope que falta rompió el protocolo"
+
+# El puente stdio no tiene catálogo propio: lo pide al servidor.
+AGENTDESK_URL="$BASE" AGENTDESK_TOKEN="$mcp_token" node mcp/agentdesk-mcp.mjs --list \
+  | grep -q '^get_next_task' \
+  && ok "el puente stdio lista lo que publica el servidor" || bad "el puente stdio no lista nada"
+
+# ---------------------------------------------------------------------------
+step "11b. Lease, aprobaciones y humano en medio"
+# ---------------------------------------------------------------------------
+flow_token="$(curl -fsS -b "$JAR" -X POST "$BASE/api/agents/$AGENT_ID/tokens" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"flujo","scopes":["tasks:write","delegations:write","runs:write"]}' | jget secret)"
+rival_token="$(curl -fsS -b "$JAR" -X POST "$BASE/api/agents/$OTHER_AGENT_ID/tokens" \
+  -H 'Content-Type: application/json' -d '{"name":"rival","scopes":["tasks:write"]}' | jget secret)"
+
+flow() { curl -fsS -X POST "$BASE/api/mcp" -H "Authorization: Bearer $flow_token" \
+  -H 'Content-Type: application/json' -d "$1"; }
+rival() { curl -fsS -X POST "$BASE/api/mcp" -H "Authorization: Bearer $rival_token" \
+  -H 'Content-Type: application/json' -d "$1"; }
+# tool '<nombre>' '<json de argumentos>' → el texto del resultado, ya parseado
+tooltext() { jget result.content.0.text; }
+
+FLOW_TASK_ID="$(curl -fsS -b "$JAR" -X POST "$BASE/api/tasks" \
+  -H 'Content-Type: application/json' \
+  -d "{\"title\":\"Smoke: flujo con aprobacion\",\"projectId\":\"$PROJECT_ID\",\"priority\":\"urgent\"}" | jget task.id)"
+[ -n "$FLOW_TASK_ID" ] && ok "tarea del flujo creada (${FLOW_TASK_ID:0:8})" || bad "no se pudo crear la tarea del flujo"
+
+# Reclamar es atómico: el primero se la lleva…
+claim="$(flow "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"claim_task\",\"arguments\":{\"taskId\":\"$FLOW_TASK_ID\"}}}" | tooltext)"
+printf '%s' "$claim" | grep -q 'leaseExpiresAt' \
+  && ok "claim_task abre el lease" || bad "claim_task no devolvió lease"
+
+# …y el segundo se queda fuera mientras el lease siga vivo.
+rival_claim="$(rival "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"claim_task\",\"arguments\":{\"taskId\":\"$FLOW_TASK_ID\"}}}")"
+[ "$(printf '%s' "$rival_claim" | jget result.isError)" = "True" ] \
+  && ok "un segundo agente no puede reclamar lo ya reclamado" || bad "dos agentes se llevaron la misma tarea"
+
+# Y tampoco puede cerrarla sin tener el lease.
+rival_done="$(rival "{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"tools/call\",\"params\":{\"name\":\"complete_task\",\"arguments\":{\"taskId\":\"$FLOW_TASK_ID\"}}}")"
+[ "$(printf '%s' "$rival_done" | jget result.isError)" = "True" ] \
+  && ok "sin lease no se cierra una tarea" || bad "se cerró una tarea sin tener el lease"
+
+# Repetir el claim es el heartbeat: renueva en lugar de fallar.
+renew="$(flow "{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tools/call\",\"params\":{\"name\":\"claim_task\",\"arguments\":{\"taskId\":\"$FLOW_TASK_ID\"}}}" | tooltext)"
+printf '%s' "$renew" | grep -q '"renewed": true' \
+  && ok "claim_task repetido renueva el lease" || bad "claim_task repetido no renovó"
+
+# Un solo run por tarea: dos append_log reutilizan el mismo.
+run_a="$(flow "{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/call\",\"params\":{\"name\":\"append_log\",\"arguments\":{\"taskId\":\"$FLOW_TASK_ID\",\"message\":\"primera\"}}}" | tooltext | jget runId)"
+run_b="$(flow "{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tools/call\",\"params\":{\"name\":\"append_log\",\"arguments\":{\"taskId\":\"$FLOW_TASK_ID\",\"message\":\"segunda\"}}}" | tooltext | jget runId)"
+[ -n "$run_a" ] && [ "$run_a" = "$run_b" ] \
+  && ok "append_log reutiliza el run de la tarea" || bad "se abrió un segundo run para la misma tarea"
+
+# propose_delegation no delega: aparca con los argumentos exactos.
+proposal="$(flow "{\"jsonrpc\":\"2.0\",\"id\":16,\"method\":\"tools/call\",\"params\":{\"name\":\"propose_delegation\",\"arguments\":{\"taskId\":\"$FLOW_TASK_ID\",\"toAgentId\":\"$OTHER_AGENT_ID\",\"title\":\"Smoke: delegacion propuesta\"}}}" | tooltext)"
+APPROVAL_ID="$(printf '%s' "$proposal" | jget approvalId)"
+[ "$(printf '%s' "$proposal" | jget status)" = "pending_approval" ] \
+  && ok "propose_delegation deja la acción en pausa" || bad "propose_delegation no pidió aprobación"
+[ "$(curl -fsS -b "$JAR" "$BASE/api/delegations?taskId=$FLOW_TASK_ID" | jget delegations.0.id)" = "" ] \
+  && ok "y no ha creado ninguna delegación todavía" || bad "se creó una delegación sin aprobarla"
+
+# La bandeja la ve, con su riesgo y su plazo.
+inbox="$(curl -fsS -b "$JAR" "$BASE/api/approvals?status=pending")"
+printf '%s' "$inbox" | grep -q "$APPROVAL_ID" \
+  && ok "la aprobación aparece en la bandeja" || bad "la aprobación no está en la bandeja"
+[ "$(printf '%s' "$inbox" | jget approvals.0.risk)" = "high" ] \
+  && ok "delegar se marca como riesgo alto" || bad "el riesgo de delegar no es alto"
+
+# Un rechazo sin motivo no cuela: el agente tiene que poder actuar con él.
+code="$(status -b "$JAR" -X PATCH "$BASE/api/approvals/$APPROVAL_ID" \
+  -H 'Content-Type: application/json' -d '{"action":"reject"}')"
+[ "$code" = "422" ] && ok "rechazar sin motivo → 422" || bad "rechazar sin motivo → $code (esperado 422)"
+
+# Aprobar editando los argumentos: los del agente se conservan.
+decided="$(curl -fsS -b "$JAR" -X PATCH "$BASE/api/approvals/$APPROVAL_ID" \
+  -H 'Content-Type: application/json' \
+  -d "{\"action\":\"approve\",\"payload\":{\"toAgentId\":\"$OTHER_AGENT_ID\",\"title\":\"Smoke: titulo editado\",\"taskId\":\"$FLOW_TASK_ID\"},\"reason\":\"Adelante, con cambios\"}")"
+[ "$(printf '%s' "$decided" | jget approval.status)" = "approved" ] \
+  && ok "la aprobación queda aprobada" || bad "la aprobación no se aprobó"
+FLOW_DELEGATION_ID="$(printf '%s' "$decided" | jget delegation.id)"
+[ -n "$FLOW_DELEGATION_ID" ] \
+  && ok "aprobar crea la delegación de verdad" || bad "aprobar no creó la delegación"
+[ "$(printf '%s' "$decided" | jget delegation.title)" = "Smoke: titulo editado" ] \
+  && ok "la delegación usa los argumentos editados" || bad "la delegación ignoró la edición"
+
+# Una decisión no se sobrescribe.
+code="$(status -b "$JAR" -X PATCH "$BASE/api/approvals/$APPROVAL_ID" \
+  -H 'Content-Type: application/json' -d '{"action":"reject","reason":"me lo repienso"}')"
+[ "$code" = "409" ] && ok "decidir dos veces → 409" || bad "decidir dos veces → $code (esperado 409)"
+
+# El agente lee la decisión, con los argumentos editados, sin herramientas nuevas.
+seen="$(flow "{\"jsonrpc\":\"2.0\",\"id\":17,\"method\":\"tools/call\",\"params\":{\"name\":\"get_task\",\"arguments\":{\"taskId\":\"$FLOW_TASK_ID\"}}}" | tooltext)"
+printf '%s' "$seen" | grep -q '"decision": "approved"' \
+  && ok "get_task le cuenta al agente la decisión" || bad "el agente no puede leer la decisión"
+printf '%s' "$seen" | grep -q 'titulo editado' \
+  && ok "y le da los argumentos con los que se aprobó" || bad "el agente no recibe payloadEdited"
+
+# Un rechazo con motivo llega al agente tal cual.
+rejected="$(flow "{\"jsonrpc\":\"2.0\",\"id\":18,\"method\":\"tools/call\",\"params\":{\"name\":\"request_approval\",\"arguments\":{\"taskId\":\"$FLOW_TASK_ID\",\"tool\":\"shell.run\",\"title\":\"Smoke: ejecutar algo\",\"payload\":{\"cmd\":\"true\"},\"idempotencyKey\":\"smoke:1\"}}}" | tooltext)"
+REJECT_ID="$(printf '%s' "$rejected" | jget approvalId)"
+
+# La misma clave de idempotencia no abre una segunda petición.
+again="$(flow "{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/call\",\"params\":{\"name\":\"request_approval\",\"arguments\":{\"taskId\":\"$FLOW_TASK_ID\",\"tool\":\"shell.run\",\"title\":\"Smoke: ejecutar algo\",\"payload\":{\"cmd\":\"true\"},\"idempotencyKey\":\"smoke:1\"}}}" | tooltext | jget approvalId)"
+[ "$again" = "$REJECT_ID" ] \
+  && ok "idempotencyKey devuelve la petición que ya existía" || bad "se duplicó la petición"
+
+curl -fsS -b "$JAR" -X PATCH "$BASE/api/approvals/$REJECT_ID" -H 'Content-Type: application/json' \
+  -d '{"action":"reject","reason":"Smoke: no toques nada"}' > /dev/null
+after="$(flow "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"tools/call\",\"params\":{\"name\":\"get_task\",\"arguments\":{\"taskId\":\"$FLOW_TASK_ID\"}}}" | tooltext)"
+printf '%s' "$after" | grep -q 'no toques nada' \
+  && ok "el motivo del rechazo llega al agente" || bad "el agente no recibe el motivo"
+
+# Autonomía: en suggest_only ni siquiera cambia el estado.
+curl -fsS -b "$JAR" -X PATCH "$BASE/api/tasks/$FLOW_TASK_ID" -H 'Content-Type: application/json' \
+  -d '{"autonomy":"suggest_only"}' > /dev/null
+blocked="$(flow "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"tools/call\",\"params\":{\"name\":\"update_task_status\",\"arguments\":{\"taskId\":\"$FLOW_TASK_ID\",\"status\":\"done\"}}}" | tooltext)"
+[ "$(printf '%s' "$blocked" | jget status)" = "pending_approval" ] \
+  && ok "en suggest_only cambiar el estado pide aprobación" || bad "suggest_only no frenó el cambio de estado"
+# Y la herramienta antigua tampoco es una puerta de atrás.
+side_door="$(flow "{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"tools/call\",\"params\":{\"name\":\"update_task\",\"arguments\":{\"taskId\":\"$FLOW_TASK_ID\",\"status\":\"done\"}}}" | tooltext)"
+[ "$(printf '%s' "$side_door" | jget status)" = "pending_approval" ] \
+  && ok "update_task pasa por el mismo filtro" || bad "update_task se saltó el filtro"
+[ "$(curl -fsS -b "$JAR" "$BASE/api/tasks/$FLOW_TASK_ID" | jget task.status)" != "done" ] \
+  && ok "y la tarea sigue sin cerrarse" || bad "la tarea se cerró sin aprobación"
+
+# Comentar sigue siendo libre, también en suggest_only.
+free="$(flow "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"tools/call\",\"params\":{\"name\":\"add_comment\",\"arguments\":{\"taskId\":\"$FLOW_TASK_ID\",\"body\":\"Smoke: propongo cerrarla\"}}}")"
+[ "$(printf '%s' "$free" | jget result.isError)" != "True" ] \
+  && ok "comentar es libre en cualquier autonomía" || bad "comentar pidió permiso"
+
+# Un PATCH parcial no debe reescribir lo que no mandas.
+curl -fsS -b "$JAR" -X PATCH "$BASE/api/tasks/$FLOW_TASK_ID" -H 'Content-Type: application/json' \
+  -d '{"title":"Smoke: flujo renombrado"}' > /dev/null
+patched="$(curl -fsS -b "$JAR" "$BASE/api/tasks/$FLOW_TASK_ID")"
+[ "$(printf '%s' "$patched" | jget task.priority)" = "urgent" ] \
+  && ok "renombrar no toca la prioridad" || bad "un PATCH parcial reescribió la prioridad"
+[ "$(printf '%s' "$patched" | jget task.autonomy)" = "suggest_only" ] \
+  && ok "ni la autonomía" || bad "un PATCH parcial reescribió la autonomía"
 
 # ---------------------------------------------------------------------------
 step "12. Limpieza"
@@ -677,6 +845,10 @@ curl -fsS -b "$JAR" -X DELETE "$BASE/api/labels/$CAPTURED_LABEL_ID" > /dev/null 
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/notes/$NOTE_A_ID" > /dev/null && ok "nota A eliminada"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/notes/$NOTE_B_ID" > /dev/null && ok "nota B eliminada"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/notes/$IMPORTED_ID" > /dev/null && ok "nota importada eliminada"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$FLOW_TASK_ID" > /dev/null \
+  && ok "tarea del flujo eliminada (con sus aprobaciones y su run)"
+[ "$(curl -fsS -b "$JAR" "$BASE/api/approvals" | jget approvals.0.id)" = "" ] \
+  && ok "no queda ninguna aprobación" || bad "quedan aprobaciones en la base de datos"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$AGENT_TASK_ID" > /dev/null && ok "tarea del agente eliminada"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/agents/$AGENT_ID" > /dev/null && ok "agente eliminado (con sus runs y delegaciones)"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/agents/$OTHER_AGENT_ID" > /dev/null && ok "agente vecino eliminado"

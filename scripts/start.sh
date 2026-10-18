@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Levanta AgentDesk entero: construye la imagen si hace falta, arranca los
+# Levanta AgentDesk entero: reconstruye la imagen, arranca los
 # contenedores y espera a que el healthcheck diga "healthy".
 #
-#   ./scripts/start.sh              # arranca (construye solo si falta la imagen)
-#   ./scripts/start.sh --build      # fuerza reconstruir la imagen
+#   ./scripts/start.sh              # reconstruye y arranca
+#   ./scripts/start.sh --build      # alias conservado por compatibilidad
 #   ./scripts/start.sh --no-wait    # no espera al healthcheck
 #
 # Es idempotente: si ya estaba arrancado, no le pasa nada.
@@ -17,7 +17,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-BUILD=0
+BUILD=1
 WAIT=1
 for arg in "$@"; do
   case "$arg" in
@@ -75,10 +75,7 @@ esac
 # ---------------------------------------------------------------------------
 
 if [ "$BUILD" = "1" ]; then
-  printf '\nConstruyendo la imagen…\n'
-  docker compose build
-elif ! docker image inspect agentdesk:latest > /dev/null 2>&1; then
-  printf '\nNo hay imagen todavía: la construyo (la primera vez tarda unos minutos).\n'
+  printf '\nReconstruyendo la imagen…\n'
   docker compose build
 fi
 

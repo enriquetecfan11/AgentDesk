@@ -5,7 +5,13 @@
  * This is the contract the UI codes against, so the domain layer is free to
  * change how it reads the database.
  */
-import type { TaskPriorityValue, TaskStatusValue } from '@/lib/constants';
+import type {
+  ApprovalStatusValue,
+  RiskLevelValue,
+  TaskAutonomyValue,
+  TaskPriorityValue,
+  TaskStatusValue,
+} from '@/lib/constants';
 
 export type ProjectRef = {
   id: string;
@@ -30,6 +36,7 @@ export type TaskDTO = {
   parentTaskId: string | null;
   assigneeType: 'human' | 'agent' | null;
   assigneeId: string | null;
+  assigneeName: string | null;
   dueDate: string | null;
   dueTime: string | null;
   recurrence: string | null;
@@ -41,6 +48,17 @@ export type TaskDTO = {
   labels: LabelRef[];
   subtaskTotal: number;
   subtaskDone: number;
+
+  /** How much the agent working this task may do on its own. */
+  autonomy: TaskAutonomyValue;
+  /** Lease, when an agent currently holds the task. */
+  claimedByAgentId: string | null;
+  claimedByAgentName: string | null;
+  leaseExpiresAt: string | null;
+  heartbeatAt: string | null;
+  claimCount: number;
+  /** Seconds left on the lease; null when nobody holds it. */
+  leaseSecondsLeft: number | null;
 };
 
 export type ProjectDTO = {
@@ -79,6 +97,39 @@ export type ActivityDTO = {
   entityId: string | null;
   meta: Record<string, unknown> | null;
   createdAt: string;
+};
+
+// ---------------------------------------------------------------------------
+// Approvals
+// ---------------------------------------------------------------------------
+
+export type ApprovalDTO = {
+  id: string;
+  taskId: string;
+  agentId: string;
+  runId: string | null;
+  tool: string;
+  risk: RiskLevelValue;
+  status: ApprovalStatusValue;
+  title: string;
+  summary: string | null;
+  /** The exact arguments the agent sent. Shown verbatim, never rewritten. */
+  payload: Record<string, unknown>;
+  /** Present only when a person changed the arguments before approving. */
+  payloadEdited: Record<string, unknown> | null;
+  reason: string | null;
+  decidedByUserId: string | null;
+  decidedByUserName: string | null;
+  decidedAt: string | null;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+  /** Seconds before it lapses; null once decided. */
+  secondsLeft: number | null;
+  /** What the agent should do: `expired` is reported as `rejected`. */
+  decision: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  task: { id: string; title: string; status: TaskStatusValue } | null;
+  agent: AgentRef | null;
 };
 
 // ---------------------------------------------------------------------------

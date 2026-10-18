@@ -226,7 +226,13 @@ export function AgentDetail({
         icon={<KeyRound className="size-4 text-muted-foreground" />}
         title="Tokens"
         description="Cada token tiene sus scopes. Solo se ve el prefijo: el valor se muestra una vez al crearlo."
-        action={<NewTokenDialog agentId={agent.id} onCreated={() => router.refresh()} />}
+        action={
+          <NewTokenDialog
+            agentId={agent.id}
+            baseUrl={baseUrl}
+            onCreated={() => router.refresh()}
+          />
+        }
       >
         {tokens.length === 0 ? (
           <p className="px-3 py-6 text-center text-xs text-muted-foreground">
@@ -456,6 +462,7 @@ function Section({
 /** The three commands an agent needs to get started, ready to copy. */
 function QuickStart({ baseUrl }: { baseUrl: string }) {
   const [copied, setCopied] = useState(false);
+  const [mcpCopied, setMcpCopied] = useState(false);
 
   const snippet = [
     `export AD_TOKEN="agt_..."`,
@@ -465,6 +472,22 @@ function QuickStart({ baseUrl }: { baseUrl: string }) {
     `curl -s -X PATCH -H "Authorization: Bearer $AD_TOKEN" -H 'Content-Type: application/json' \\`,
     `  -d '{"status":"in_progress"}' ${baseUrl}/api/v1/delegations/<id> | jq`,
   ].join('\n');
+
+  const mcpConfig = JSON.stringify(
+    {
+      mcpServers: {
+        agentdesk: {
+          type: 'streamable-http',
+          url: `${baseUrl}/api/mcp`,
+          headers: {
+            Authorization: 'Bearer agt_TU_TOKEN',
+          },
+        },
+      },
+    },
+    null,
+    2,
+  );
 
   return (
     <section className="rounded-lg border border-border bg-muted/30 p-3">
@@ -488,6 +511,33 @@ function QuickStart({ baseUrl }: { baseUrl: string }) {
       <pre className="overflow-x-auto text-[11px] leading-relaxed">
         <code className="font-mono">{snippet}</code>
       </pre>
+
+      <div className="mt-3 border-t border-border pt-3">
+        <div className="mb-2 flex items-center gap-2">
+          <KeyRound className="size-3.5 text-muted-foreground" />
+          <h3 className="text-xs font-medium">Conectar por MCP</h3>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="ml-auto h-7 gap-1.5 px-2 text-[11px] text-muted-foreground"
+            onClick={async () => {
+              const ok = await copyText(mcpConfig);
+              setMcpCopied(ok);
+              toast[ok ? 'success' : 'error'](ok ? 'Configuración MCP copiada' : 'No se pudo copiar');
+            }}
+          >
+            {mcpCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+            {mcpCopied ? 'Copiado' : 'Copiar configuración'}
+          </Button>
+        </div>
+        <p className="mb-2 text-[11px] text-muted-foreground">
+          Crea un token abajo y sustituye <code className="font-mono">agt_TU_TOKEN</code> por el
+          valor que se mostrará una sola vez. También aparecerá la configuración completa al crear el token.
+        </p>
+        <pre className="max-h-40 overflow-auto rounded-md border border-border bg-background p-2 text-[10px] leading-relaxed">
+          <code className="font-mono">{mcpConfig}</code>
+        </pre>
+      </div>
     </section>
   );
 }

@@ -56,6 +56,7 @@ COPY --from=build --chown=nextjs:nodejs /app/public ./public
 COPY --from=build --chown=nextjs:nodejs /app/drizzle ./drizzle
 COPY --from=build --chown=nextjs:nodejs /app/migrate.mjs ./migrate.mjs
 COPY --from=build --chown=nextjs:nodejs /app/reset-password.mjs ./reset-password.mjs
+COPY --from=build --chown=nextjs:nodejs /app/mcp ./mcp
 COPY --chown=nextjs:nodejs docker/entrypoint.sh ./entrypoint.sh
 
 # @node-rs/argon2 loads its prebuilt .node binary through a dynamic require,

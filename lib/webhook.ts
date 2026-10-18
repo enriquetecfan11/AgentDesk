@@ -58,6 +58,21 @@ export const WEBHOOK_EVENTS: WebhookEventDefinition[] = [
     description: 'Cambia el estado de una delegación.',
   },
   {
+    name: 'approval.requested',
+    label: 'Aprobaciones pedidas',
+    description: 'Un agente pide permiso para algo y se queda esperando tu decisión.',
+  },
+  {
+    name: 'approval.decided',
+    label: 'Aprobaciones decididas',
+    description: 'Una aprobación se aprueba, se rechaza, se cancela o caduca.',
+  },
+  {
+    name: 'task.claimed',
+    label: 'Tareas reclamadas',
+    description: 'Un agente toma una tarea y abre su lease.',
+  },
+  {
     name: 'run.updated',
     label: 'Runs',
     description: 'Un run se abre o se cierra.',

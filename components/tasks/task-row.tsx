@@ -82,6 +82,15 @@ export function TaskRow({
 
         {task.recurrence && <RecurrenceBadge rule={task.recurrence} />}
 
+        {task.assigneeType && (
+          <span
+            className="hidden shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground sm:inline-flex"
+            title={`Responsable: ${task.assigneeName ?? (task.assigneeType === 'human' ? 'Yo' : 'Agente')}`}
+          >
+            {task.assigneeName ?? (task.assigneeType === 'human' ? 'Yo' : 'Agente')}
+          </span>
+        )}
+
         <span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
           {task.labels.slice(0, 3).map((label) => (
             <span

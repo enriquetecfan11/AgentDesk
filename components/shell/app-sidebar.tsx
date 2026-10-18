@@ -12,6 +12,7 @@ import {
   NotebookPen,
   PlayCircle,
   Settings,
+  ShieldCheck,
   type LucideIcon,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -29,6 +30,14 @@ type NavItem = {
   icon: LucideIcon;
   /** Phase that implements it; shown as a hint while it is a placeholder. */
   pending?: boolean;
+  /**
+   * Name of a counter this entry shows as a badge.
+   *
+   * The sidebar is a Client Component and cannot query anything, so the number
+   * is threaded in from the layout. Only the *name* lives here, which keeps
+   * the nav table declarative.
+   */
+  badge?: 'approvals';
 };
 
 const NAV_GROUPS: { items: NavItem[] }[] = [
@@ -48,9 +57,14 @@ const NAV_GROUPS: { items: NavItem[] }[] = [
   },
   {
     items: [
-      { href: '/activity', label: 'Actividad', icon: Activity },
+      { href: '/approvals', label: 'Aprobaciones', icon: ShieldCheck, badge: 'approvals' },
       { href: '/agents', label: 'Agentes', icon: Bot },
       { href: '/runs', label: 'Runs', icon: PlayCircle },
+    ],
+  },
+  {
+    items: [
+      { href: '/activity', label: 'Actividad', icon: Activity },
     ],
   },
 ];
@@ -66,11 +80,15 @@ export function SidebarBrand() {
   );
 }
 
+export type NavBadges = { approvals?: number };
+
 export function AppSidebarNav({
   user,
+  badges,
   onNavigate,
 }: {
   user: { name: string; email: string };
+  badges?: NavBadges;
   onNavigate?: () => void;
 }) {
   const pathname = usePathname();
@@ -112,6 +130,12 @@ export function AppSidebarNav({
                   >
                     <item.icon className="size-4 shrink-0" aria-hidden />
                     <span className="truncate">{item.label}</span>
+                    {item.badge && (badges?.[item.badge] ?? 0) > 0 && (
+                      <span className="ml-auto shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-semibold text-accent-foreground">
+                        {badges?.[item.badge]}
+                        <span className="sr-only"> esperando tu decisión</span>
+                      </span>
+                    )}
                     {item.pending && (
                       <span
                         className="ml-auto size-1.5 shrink-0 rounded-full bg-current opacity-30"
@@ -160,6 +184,7 @@ export function AppSidebarNav({
             onClick={signOut}
             disabled={signingOut}
             aria-label="Cerrar sesión"
+            title="Cerrar sesión"
             className="size-11 text-sidebar-foreground hover:bg-sidebar-active hover:text-white md:size-9"
           >
             <LogOut className="size-4" />
@@ -170,11 +195,17 @@ export function AppSidebarNav({
   );
 }
 
-export function AppSidebar({ user }: { user: { name: string; email: string } }) {
+export function AppSidebar({
+  user,
+  badges,
+}: {
+  user: { name: string; email: string };
+  badges?: NavBadges;
+}) {
   return (
     <aside className="hidden w-60 shrink-0 flex-col bg-sidebar md:flex">
       <SidebarBrand />
-      <AppSidebarNav user={user} />
+      <AppSidebarNav user={user} badges={badges} />
     </aside>
   );
 }

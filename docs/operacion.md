@@ -170,3 +170,57 @@ Tablas creadas por la migración inicial (`drizzle/0000_init.sql`):
 | Conocimiento | `decisions` |
 | Credenciales | `api_tokens` |
 | Operación | `activity_log`, `saved_views`, `webhooks` |
+
+---
+
+## El runner en cron
+
+`scripts/task-runner.mjs` hace **una pasada por invocación**: reclama una tarea, cuenta lo que
+hace, propone lo que no puede hacer solo y se va. No es un demonio y no tiene bucle propio,
+así que el ritmo lo marca el cron y cada pasada deja su rastro en el log del sistema.
+
+En el `crontab` del anfitrión, cada cinco minutos:
+
+```
+*/5 * * * * cd /ruta/a/agent-os && AGENTDESK_URL=http://192.168.1.50:3000 AGENTDESK_TOKEN=agt_… node scripts/task-runner.mjs >> /var/log/agentdesk-runner.log 2>&1
+```
+
+Variables opcionales, para repartir el trabajo sin tocar el código:
+
+| Variable | Para qué |
+|---|---|
+| `AGENTDESK_RUNNER_PROJECT` | Limita la pasada a un proyecto |
+| `AGENTDESK_RUNNER_DELEGATE_LABEL` | Etiqueta que significa «esto no es mío» |
+| `AGENTDESK_RUNNER_DELEGATE_TO` | UUID del agente a quien proponérsela |
+| `AGENTDESK_RUNNER_TOOL` | Nombre de la acción que pide ejecutar (`task.execute`) |
+
+Opciones: `--max=N` tareas por pasada (1 por defecto) y `--dry`, que reclama y lee pero no
+propone, ni comenta, ni cierra.
+
+**Dos pasadas simultáneas no se pisan.** `get_next_task` reclama con un lease y
+`for update skip locked`, así que cada una se lleva una tarea distinta. Y un solo run por tarea,
+porque `append_log` reutiliza el run abierto en lugar de abrir otro.
+
+### Qué mirar cuando algo va raro
+
+| Síntoma | Dónde |
+|---|---|
+| El agente no avanza | **Aprobaciones**: probablemente está esperando una decisión tuya |
+| Una tarea lleva horas «en curso» | El detalle de la tarea enseña el lease y lo que le queda |
+| Una tarea va y viene de la cola | `claimCount` alto en el detalle: el runner la coge y la suelta |
+| Tareas que vuelven solas a «por hacer» | `task.lease_expired` en **Actividad**: el runner dejó de dar señales |
+| «No tengo el lease de esta tarea» | Otro agente la tiene; se ve en el detalle quién |
+
+### Los plazos
+
+Se ajustan por entorno y se validan al arrancar (entre 30 segundos y 7 días):
+
+| Variable | Por defecto | Qué pasa si se agota |
+|---|---|---|
+| `AGENTDESK_LEASE_TTL_SECONDS` | 900 (15 min) | La tarea vuelve a `todo` y la puede coger otro |
+| `AGENTDESK_HEARTBEAT_SECONDS` | 300 (5 min) | Nada: es lo que se le sugiere al runner |
+| `AGENTDESK_APPROVAL_TTL_SECONDS` | 86400 (24 h) | La aprobación pasa a `expired`, **y eso cuenta como rechazo** |
+
+Bajar el lease reacciona antes ante un agente colgado, pero un runner que tarde en una llamada
+larga lo pierde a mitad de trabajo. Subirlo mucho hace que una tarea tomada por un agente muerto
+tarde lo mismo en volver a estar disponible.

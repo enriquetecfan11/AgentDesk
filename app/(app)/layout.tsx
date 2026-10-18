@@ -3,6 +3,7 @@ import { AppSidebar } from '@/components/shell/app-sidebar';
 import { LiveUpdates } from '@/components/shell/live-updates';
 import { Topbar } from '@/components/shell/topbar';
 import { requireUser } from '@/lib/auth/session';
+import { countPendingApprovals } from '@/lib/domain/approvals';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,6 +13,10 @@ export const dynamic = 'force-dynamic';
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
+  // The sidebar is a Client Component, so the badge count is read here and
+  // passed down. Every page under (app) is already `force-dynamic`, so this
+  // adds one count query per navigation, not a cache to invalidate.
+  const pendingApprovals = await countPendingApprovals();
 
   return (
     <div className="flex h-dvh overflow-hidden">
@@ -23,7 +28,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       >
         Saltar al contenido
       </a>
-      <AppSidebar user={user} />
+      <AppSidebar user={user} badges={{ approvals: pendingApprovals }} />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar user={user} />
         {/* tabIndex={-1} so the skip link can actually move the focus here. */}

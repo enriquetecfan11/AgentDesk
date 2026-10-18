@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
 import {
+  AutonomySelect,
   DueDateField,
   FieldRow,
   LabelPicker,
@@ -19,7 +20,12 @@ import { Input } from '@/components/ui/input';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Textarea } from '@/components/ui/textarea';
 import { api } from '@/lib/api-client';
-import type { TaskPriorityValue, TaskStatusValue } from '@/lib/constants';
+import {
+  TASK_AUTONOMY_META,
+  type TaskAutonomyValue,
+  type TaskPriorityValue,
+  type TaskStatusValue,
+} from '@/lib/constants';
 import { formatTimestamp } from '@/lib/dates';
 import type { LabelDTO, ProjectDTO, TaskDTO } from '@/lib/types';
 import type { TaskPatch } from '@/components/tasks/use-tasks';
@@ -199,6 +205,18 @@ export function TaskDetailSheet({
                   onCreate={onCreateLabel}
                 />
               </FieldRow>
+
+              <FieldRow label="Autonomía">
+                <AutonomySelect
+                  value={task.autonomy}
+                  onChange={(value: TaskAutonomyValue) => onUpdate(task.id, { autonomy: value })}
+                />
+                <span className="w-full text-[11px] text-muted-foreground">
+                  {TASK_AUTONOMY_META[task.autonomy].hint}
+                </span>
+              </FieldRow>
+
+              <LeaseRow task={task} />
             </div>
 
             <div className="px-5 py-4">
@@ -294,5 +312,39 @@ export function TaskDetailSheet({
         )}
       </SheetContent>
     </Sheet>
+  );
+}
+
+/**
+ * Who is holding the task right now.
+ *
+ * Only rendered when somebody is: an empty "nobody has this" row on every
+ * task would be noise on the ninety per cent of tasks no agent ever touches.
+ * The countdown is what makes a stuck runner visible — a lease that never
+ * moves is an agent that stopped calling.
+ */
+function LeaseRow({ task }: { task: TaskDTO }) {
+  if (!task.claimedByAgentId || task.leaseSecondsLeft === null) return null;
+
+  const left = task.leaseSecondsLeft;
+  const countdown =
+    left <= 0
+      ? 'el lease ha caducado: volverá a la cola'
+      : left < 60
+        ? `caduca en ${left} s`
+        : `caduca en ${Math.floor(left / 60)} min`;
+
+  return (
+    <FieldRow label="Lease">
+      <span className="text-xs">
+        {task.claimedByAgentName ?? 'Un agente'} la tiene tomada
+        <span className="text-muted-foreground"> · {countdown}</span>
+      </span>
+      {task.claimCount > 1 ? (
+        <span className="text-[11px] text-muted-foreground">
+          tomada {task.claimCount} veces
+        </span>
+      ) : null}
+    </FieldRow>
   );
 }

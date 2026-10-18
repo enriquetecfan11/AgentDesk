@@ -146,6 +146,12 @@ export function TaskBoard({
                           </span>
                         )}
 
+                        {task.assigneeType && (
+                          <span className="inline-flex rounded-full border border-border px-1.5 py-0.5 text-[11px]">
+                            {task.assigneeName ?? (task.assigneeType === 'human' ? 'Yo' : 'Agente')}
+                          </span>
+                        )}
+
                         {showProject && task.project && (
                           <span className="inline-flex items-center gap-1">
                             <span

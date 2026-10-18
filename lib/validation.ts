@@ -49,6 +49,11 @@ export const taskStatusSchema = z.enum([
   'cancelled',
 ]);
 export const taskPrioritySchema = z.enum(['none', 'low', 'normal', 'high', 'urgent']);
+export const taskAutonomySchema = z.enum([
+  'suggest_only',
+  'do_with_approval',
+  'autonomous_low_risk',
+]);
 
 export const projectCreateSchema = z.object({
   name: z.string().trim().min(1, 'El nombre es obligatorio').max(120),
@@ -78,7 +83,17 @@ export const milestoneSchema = z.object({
     .nullish(),
 });
 
+/**
+ * `.partial()` does not undo a `.default()`.
+ *
+ * It makes the key optional on the way *in*, but zod still injects the default
+ * on the way *out* — so a PATCH that only carried one field came back with
+ * `status` and `priority` filled in, and the update applied them. Renaming a
+ * task reset its priority. Every field with a default is therefore re-declared
+ * here without one, so an absent field stays absent.
+ */
 export const projectUpdateSchema = projectCreateSchema.partial().extend({
+  status: projectStatusSchema.optional(),
   milestones: z.array(milestoneSchema).max(50).nullish(),
 });
 
@@ -122,10 +137,16 @@ export const taskCreateSchema = z.object({
   dueDate: dateOnly,
   dueTime: timeOfDay,
   recurrence,
+  // Optional on the way in: the column defaults to `do_with_approval`, so
+  // existing callers (quick capture, the MCP tools) need not know about it.
+  autonomy: taskAutonomySchema.optional(),
   labelIds: z.array(z.uuid()).max(20).optional(),
 });
 
+/** See the note on `projectUpdateSchema`: the defaults have to go. */
 export const taskUpdateSchema = taskCreateSchema.partial().omit({ labelIds: true }).extend({
+  status: taskStatusSchema.optional(),
+  priority: taskPrioritySchema.optional(),
   sortOrder: z.number().optional(),
 });
 
@@ -210,7 +231,10 @@ export const agentCreateSchema = z.object({
   status: z.enum(['active', 'paused', 'archived']).default('active'),
 });
 
-export const agentUpdateSchema = agentCreateSchema.partial();
+/** See the note on `projectUpdateSchema`. */
+export const agentUpdateSchema = agentCreateSchema.partial().extend({
+  status: z.enum(['active', 'paused', 'archived']).optional(),
+});
 
 /** `null` means "never expires". */
 const expiresAt = z.iso.datetime({ offset: true }).nullish();
@@ -257,6 +281,52 @@ export const delegationUpdateSchema = z.object({
 export const delegationReviewSchema = z.object({
   action: z.enum(['approve', 'cancel']),
 });
+
+// ---------------------------------------------------------------------------
+// Approvals
+// ---------------------------------------------------------------------------
+
+/**
+ * What an agent sends when it wants to do something it is not allowed to do
+ * alone. `tool` is free text because most of what needs approving happens
+ * outside AgentDesk: `shell.run`, `email.send`, `host.delete`.
+ */
+export const approvalRequestSchema = z.object({
+  taskId: z.uuid(),
+  tool: z
+    .string()
+    .trim()
+    .min(1, 'Di qué herramienta quieres usar')
+    .max(120)
+    .regex(/^[a-z0-9_.:-]+$/i, 'El nombre de la herramienta solo admite letras, números, . _ : y -'),
+  title: z.string().trim().min(1, 'El título es obligatorio').max(300),
+  summary: z.string().trim().max(20_000).nullish(),
+  /** The exact arguments. Stored and shown verbatim. */
+  payload: z.record(z.string(), z.unknown()).default({}),
+  runId: z.uuid().nullish(),
+  /** Lets a retry after a timeout reuse the request instead of opening a second. */
+  idempotencyKey: z.string().trim().min(1).max(200).nullish(),
+});
+
+/**
+ * The human decision.
+ *
+ * `payload` is the edited arguments: present only when you changed them, so
+ * the original is never lost. `reason` is the rejection motive or the answer
+ * to a question, and the agent receives it either way.
+ */
+export const approvalDecisionSchema = z
+  .object({
+    action: z.enum(['approve', 'reject', 'cancel']),
+    payload: z.record(z.string(), z.unknown()).optional(),
+    reason: z.string().trim().max(20_000).nullish(),
+  })
+  .refine((value) => value.action !== 'reject' || Boolean(value.reason?.trim()), {
+    // A rejection the agent cannot act on is a dead end: it retries the same
+    // thing and gets stopped again.
+    message: 'Un rechazo necesita un motivo: el agente lo recibe y actúa en consecuencia',
+    path: ['reason'],
+  });
 
 // ---------------------------------------------------------------------------
 // Runs
@@ -344,7 +414,9 @@ export const webhookCreateSchema = z.object({
   active: z.boolean().default(true),
 });
 
+/** See the note on `projectUpdateSchema`. */
 export const webhookUpdateSchema = webhookCreateSchema.partial().extend({
+  active: z.boolean().optional(),
   /** Issues a new secret and invalidates the one the receiver knows. */
   rotateSecret: z.boolean().optional(),
 });
@@ -367,6 +439,8 @@ export type NoteImportInput = z.infer<typeof noteImportSchema>;
 export type AgentCreateInput = z.infer<typeof agentCreateSchema>;
 export type AgentUpdateInput = z.infer<typeof agentUpdateSchema>;
 export type TokenCreateInput = z.infer<typeof tokenCreateSchema>;
+export type ApprovalRequestInput = z.infer<typeof approvalRequestSchema>;
+export type ApprovalDecisionInput = z.infer<typeof approvalDecisionSchema>;
 export type DelegationCreateInput = z.infer<typeof delegationCreateSchema>;
 export type DelegationUpdateInput = z.infer<typeof delegationUpdateSchema>;
 export type RunCreateInput = z.infer<typeof runCreateSchema>;

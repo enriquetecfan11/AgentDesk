@@ -59,6 +59,73 @@ const taskSchema: Json = {
     labels: { type: 'array', items: { type: 'object' } },
     subtaskTotal: { type: 'integer' },
     subtaskDone: { type: 'integer' },
+    autonomy: {
+      type: 'string',
+      enum: ['suggest_only', 'do_with_approval', 'autonomous_low_risk'],
+      description: 'Cuánto puede hacer el agente sin pedir permiso en esta tarea.',
+    },
+    claimedByAgentId: {
+      type: 'string',
+      format: 'uuid',
+      nullable: true,
+      description: 'Agente que tiene el lease, si hay alguno.',
+    },
+    claimedByAgentName: { type: 'string', nullable: true },
+    leaseExpiresAt: { type: 'string', format: 'date-time', nullable: true },
+    heartbeatAt: { type: 'string', format: 'date-time', nullable: true },
+    claimCount: { type: 'integer', description: 'Veces que se ha reclamado.' },
+    leaseSecondsLeft: {
+      type: 'integer',
+      nullable: true,
+      description: 'Segundos que quedan de lease; null si no la tiene nadie.',
+    },
+  },
+};
+
+const approvalSchema: Json = {
+  type: 'object',
+  description:
+    'Una acción que un agente quiere hacer y no puede hacer sola. AgentDesk es la puerta, no el ejecutor: aprobar no ejecuta nada, se lo dice al agente.',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    taskId: { type: 'string', format: 'uuid' },
+    agentId: { type: 'string', format: 'uuid' },
+    runId: { type: 'string', format: 'uuid', nullable: true },
+    tool: {
+      type: 'string',
+      description: 'La herramienta parada: propose_delegation, shell.run, email.send…',
+    },
+    risk: { type: 'string', enum: ['low', 'medium', 'high'] },
+    status: {
+      type: 'string',
+      enum: ['pending', 'approved', 'rejected', 'expired', 'cancelled'],
+    },
+    title: { type: 'string' },
+    summary: { type: 'string', nullable: true },
+    payload: { type: 'object', description: 'Los argumentos exactos del agente.' },
+    payloadEdited: {
+      type: 'object',
+      nullable: true,
+      description: 'Los argumentos con los que se aprobó, si una persona los cambió.',
+    },
+    reason: {
+      type: 'string',
+      nullable: true,
+      description: 'Motivo del rechazo o respuesta. El agente lo recibe.',
+    },
+    decidedByUserId: { type: 'string', format: 'uuid', nullable: true },
+    decidedByUserName: { type: 'string', nullable: true },
+    decidedAt: { type: 'string', format: 'date-time', nullable: true },
+    expiresAt: { type: 'string', format: 'date-time' },
+    secondsLeft: { type: 'integer', nullable: true },
+    decision: {
+      type: 'string',
+      enum: ['pending', 'approved', 'rejected', 'cancelled'],
+      description:
+        'Qué debe hacer el agente. Falla cerrado: una aprobación caducada se informa como "rejected".',
+    },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
   },
 };
 
@@ -241,6 +308,17 @@ export function buildOpenApi(baseUrl: string): Json {
         'todo y un `403` siempre dice qué scope falta.',
         '',
         'Los agentes solo ven lo suyo: sus runs, sus delegaciones y su cola.',
+        '',
+        'Además de esta API REST hay un **servidor MCP en `POST /api/mcp`** (JSON-RPC 2.0 por',
+        'Streamable HTTP, mismo token y mismos scopes), que es por donde pasa el flujo con',
+        'humano en medio: reclamar una tarea con lease, proponer una delegación y pedir',
+        'permiso. Al ser JSON-RPC no se describe en REST; `GET /api/mcp` enumera sus',
+        'herramientas.',
+        '',
+        'Lo que un agente propone y no puede ejecutar solo queda como **aprobación**, que una',
+        'persona decide en la web (`/approvals`). Falla cerrado: una aprobación caducada se le',
+        'devuelve al agente como rechazada. El objeto está descrito en el esquema `Approval`,',
+        'y viaja también en los webhooks `approval.requested` y `approval.decided`.',
       ].join('\n'),
     },
     servers: [{ url: baseUrl, description: 'Según APP_BASE_URL' }],
@@ -713,6 +791,7 @@ export function buildOpenApi(baseUrl: string): Json {
           },
         },
         Task: taskSchema,
+        Approval: approvalSchema,
         TaskEnvelope: {
           type: 'object',
           properties: {
@@ -743,6 +822,11 @@ export function buildOpenApi(baseUrl: string): Json {
             dueDate: { type: 'string', format: 'date', nullable: true },
             dueTime: { type: 'string', nullable: true },
             recurrence: { type: 'string', nullable: true },
+            autonomy: {
+              type: 'string',
+              enum: ['suggest_only', 'do_with_approval', 'autonomous_low_risk'],
+              description: 'Por defecto `do_with_approval`.',
+            },
             labelIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
           },
         },

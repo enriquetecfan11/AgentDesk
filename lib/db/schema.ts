@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
   date,
@@ -74,6 +75,29 @@ export const runLogLevelEnum = pgEnum('run_log_level', ['debug', 'info', 'warn',
 export const artifactKindEnum = pgEnum('artifact_kind', ['file', 'text', 'url']);
 
 export const noteSourceEnum = pgEnum('note_source', ['app', 'obsidian']);
+
+/**
+ * How much a task lets the agent working it do on its own.
+ *
+ * It is a property of the task, not of the agent: the same agent can be free
+ * to close a chore and still have to ask before touching anything that leaves
+ * the machine.
+ */
+export const taskAutonomyEnum = pgEnum('task_autonomy', [
+  'suggest_only',
+  'do_with_approval',
+  'autonomous_low_risk',
+]);
+
+export const approvalStatusEnum = pgEnum('approval_status', [
+  'pending',
+  'approved',
+  'rejected',
+  'expired',
+  'cancelled',
+]);
+
+export const riskLevelEnum = pgEnum('risk_level', ['low', 'medium', 'high']);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -185,6 +209,25 @@ export const tasks = pgTable(
 
     sortOrder: real('sort_order').notNull().default(0),
     completedAt: timestamp('completed_at', { withTimezone: true }),
+
+    // How much the agent working this task may do without asking.
+    autonomy: taskAutonomyEnum('autonomy').notNull().default('do_with_approval'),
+
+    // Lease: one agent at a time holds the task, and only for a while. The
+    // lease is what makes two runners polling at once safe — and what gets the
+    // task back into the queue when one of them dies mid-run.
+    claimedByAgentId: uuid('claimed_by_agent_id').references((): AnyPgColumn => agents.id, {
+      onDelete: 'set null',
+    }),
+    // Generation of the current claim. A zombie runner holding an old claimId
+    // cannot renew or close the task someone else has taken since.
+    claimId: uuid('claim_id'),
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+    heartbeatAt: timestamp('heartbeat_at', { withTimezone: true }),
+    // Climbs on every claim. A task with a high count is a task some agent
+    // keeps picking up and dropping.
+    claimCount: integer('claim_count').notNull().default(0),
+
     createdAt,
     updatedAt,
   },
@@ -194,6 +237,10 @@ export const tasks = pgTable(
     index('tasks_parent_idx').on(t.parentTaskId),
     index('tasks_due_date_idx').on(t.dueDate),
     index('tasks_assignee_idx').on(t.assigneeType, t.assigneeId),
+    // Partial: only leased tasks are ever swept, and they are the minority.
+    index('tasks_lease_idx')
+      .on(t.leaseExpiresAt)
+      .where(sql`${t.leaseExpiresAt} is not null`),
   ],
 );
 
@@ -356,6 +403,82 @@ export const artifacts = pgTable(
   ],
 );
 
+// ---------------------------------------------------------------------------
+// Approvals: the human-in-the-loop gate
+// ---------------------------------------------------------------------------
+
+/**
+ * An action an agent wants to take and is not allowed to take on its own.
+ *
+ * The row is the whole contract: the tool that was stopped, its exact
+ * arguments, and the one decision a person made about it. AgentDesk is the
+ * gate, not the executor — approving `shell.run` does not run anything, it
+ * tells the agent (which polls `get_task`) that it may now run it itself.
+ *
+ * Three invariants live here rather than in the application:
+ *
+ *  - **Fail closed.** `expiresAt` is NOT NULL, and an expired approval is read
+ *    as a rejection. There is no way to store an approval that waits forever.
+ *  - **A decision is never overwritten.** Deciding is an UPDATE guarded on
+ *    `status = 'pending'`; a second decision matches no row and becomes a 409.
+ *  - **An agent never approves its own work.** `decidedByUserId` points at
+ *    `users`, and no route under `/api/v1` nor any MCP tool can write it.
+ */
+export const approvals = pgTable(
+  'approvals',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    // Who is asking.
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    runId: uuid('run_id').references(() => runs.id, { onDelete: 'set null' }),
+
+    // The tool that was stopped. Either one of ours (`propose_delegation`) or
+    // a name the agent chose for something it does outside AgentDesk
+    // (`shell.run`, `email.send`, `host.delete`).
+    tool: text('tool').notNull(),
+    risk: riskLevelEnum('risk').notNull().default('high'),
+    status: approvalStatusEnum('status').notNull().default('pending'),
+
+    title: text('title').notNull(),
+    summary: text('summary'),
+    // The exact arguments, shown verbatim in the inbox. Never rewritten:
+    // an edit lands in `payloadEdited` so the diff stays readable.
+    payload: jsonb('payload').notNull().default({}),
+    payloadEdited: jsonb('payload_edited'),
+    // Rejection motive, or the answer to a question. The agent reads it.
+    reason: text('reason'),
+
+    decidedByUserId: uuid('decided_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+
+    // Lets an agent retry `request_approval` after a timeout without opening a
+    // second identical request.
+    idempotencyKey: text('idempotency_key'),
+
+    createdAt,
+    updatedAt,
+  },
+  (t) => [
+    index('approvals_status_idx').on(t.status),
+    index('approvals_task_idx').on(t.taskId),
+    index('approvals_agent_idx').on(t.agentId),
+    index('approvals_pending_expiry_idx')
+      .on(t.expiresAt)
+      .where(sql`${t.status} = 'pending'`),
+    uniqueIndex('approvals_idempotency_unique')
+      .on(t.agentId, t.idempotencyKey)
+      .where(sql`${t.idempotencyKey} is not null`),
+  ],
+);
+
 export const decisions = pgTable('decisions', {
   id: uuid('id').primaryKey().defaultRandom(),
   title: text('title').notNull(),
@@ -476,6 +599,11 @@ export type Run = typeof runs.$inferSelect;
 export type RunLog = typeof runLogs.$inferSelect;
 export type Artifact = typeof artifacts.$inferSelect;
 export type Decision = typeof decisions.$inferSelect;
+export type Approval = typeof approvals.$inferSelect;
+export type NewApproval = typeof approvals.$inferInsert;
+export type ApprovalStatus = Approval['status'];
+export type RiskLevel = Approval['risk'];
+export type TaskAutonomy = Task['autonomy'];
 export type ApiToken = typeof apiTokens.$inferSelect;
 export type ActivityEntry = typeof activityLog.$inferSelect;
 export type SavedView = typeof savedViews.$inferSelect;

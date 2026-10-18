@@ -88,7 +88,11 @@ export function AgentsWorkspace({ initialAgents }: { initialAgents: AgentDTO[] }
                   className="flex h-full flex-col gap-2 rounded-lg border border-border bg-card p-3 transition-colors hover:border-foreground/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <div className="flex items-center gap-2">
-                    <span className={cn('size-2 shrink-0 rounded-full', meta.dot)} aria-hidden />
+                    <span
+                      className={cn('size-2 shrink-0 rounded-full', meta.dot)}
+                      aria-label={`Estado: ${meta.label}`}
+                      role="img"
+                    />
                     <span className="truncate text-sm font-medium">{agent.name}</span>
                     <span className={cn('ml-auto text-[11px]', meta.text)}>{meta.label}</span>
                   </div>

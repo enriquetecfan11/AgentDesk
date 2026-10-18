@@ -19,6 +19,8 @@ const GO_TO: Record<string, string> = {
   a: '/activity',
   b: '/agents',
   r: '/runs',
+  // `v` de «visto bueno»: la inicial de aprobaciones la tenía ya proyectos.
+  v: '/approvals',
   s: '/settings',
 };
 

@@ -12,6 +12,7 @@
 │        │  · UI + Route Handlers                 │            │
 │        │  · /api/health                         │            │
 │        │  · /api/v1/**  (token de agente)       │            │
+│        │  · /api/mcp    (MCP, mismo token)      │            │
 │        │  · /api/events (SSE)                   │            │
 │        │  · /api/v1/events (SSE de agentes)     │            │
 │        │  · webhooks salientes (HMAC-SHA256) ───┼──▶ n8n     │
@@ -42,6 +43,24 @@ Decisiones de diseño relevantes:
   funcionando (y el fallo queda apuntado en el propio webhook).
 - **El contenedor llega a la máquina anfitriona en `host.docker.internal`.** Compose lo publica
   como `host-gateway`, así que un webhook puede apuntar a algo que corras fuera de Docker.
+- **El servidor MCP vive dentro de la app, en `/api/mcp`.** Estuvo un rato en un contenedor
+  aparte que proxyeaba a `/api/v1`, y eso significaba autenticar dos veces, perder el detalle de
+  los errores por el camino y mantener la tabla de herramientas en dos sitios. Dentro de la app,
+  una herramienta llama al dominio directamente: un proceso, un puerto y un único catálogo.
+  `mcp/agentdesk-mcp.mjs` se queda como puente `stdio` para los clientes que exigen un proceso
+  hijo, y no tiene catálogo propio: reenvía el JSON-RPC tal cual.
+- **Nada con consecuencias lo decide un agente.** Lo que un agente propone y no puede hacer solo
+  queda en la tabla `approvals` con sus argumentos exactos, y lo decide una persona desde la web.
+  Las tres reglas duras viven donde no se pueden saltar: el plazo es `NOT NULL` y toda lectura
+  barre lo vencido (**falla cerrado**); decidir es un `UPDATE … WHERE status = 'pending'`, así
+  que la segunda decisión no encaja con ninguna fila (**no se sobrescribe**); y `decided_by_user_id`
+  apunta a `users` sin ninguna ruta de agente que lo escriba (**un agente no aprueba lo suyo**).
+- **Una tarea se reserva con un lease, no con un flag.** Reclamarla es un solo `UPDATE`
+  condicional con la guarda dentro del `WHERE`, y coger la siguiente es un CTE con
+  `for update skip locked`: dos runners simultáneos se llevan tareas distintas en lugar de pelearse
+  por una. El plazo es lo que hace recuperable un agente muerto —la tarea vuelve a la cola— y el
+  barrido se hace al leer, no desde un planificador, porque un contenedor más para una sentencia
+  cada cinco minutos no se sostiene.
 
 ---
 
@@ -114,6 +133,7 @@ app/                  Rutas de Next.js (App Router)
     notes/            Notas y vault
     agents/           Listado de agentes y ficha (tokens, delegaciones, runs)
     runs/             Historial de ejecuciones y detalle en vivo
+    approvals/        Bandeja de lo que un agente dejó esperando tu decisión
     activity/         Cronología unificada de humanos y agentes
   api/health/         Healthcheck
   api/auth/           setup, login, logout, me
@@ -129,11 +149,14 @@ app/                  Rutas de Next.js (App Router)
   api/runs/           Runs vistos desde el humano
   api/artifacts/      Descarga de artefactos (sesión o token)
   api/webhooks/       Salidas hacia fuera: CRUD y prueba manual
+  api/approvals/      Bandeja de aprobaciones y la decisión (solo sesión)
   api/openapi.json/   Especificación OpenAPI 3.1 de la API de agentes
   api/events/         SSE para la UI
+  api/mcp/            Servidor MCP: JSON-RPC 2.0 por Streamable HTTP
   api/v1/             API de agentes: Bearer, scopes, cola, runs, SSE
 components/
   agents/             Listado de agentes, ficha, token y diálogo de delegación
+  approvals/          Bandeja y diálogo de decisión (payload exacto, editable)
   auth/               Formularios de login y setup
   capture/            Caja de captura con vista previa del análisis
   notes/              Listado, editor, renderizador de Markdown y diálogo de importación
@@ -148,6 +171,14 @@ docker/
 drizzle/              Migraciones SQL versionadas (se commitean)
 lib/
   agent-token.ts      Formato, scopes y cabecera Bearer de los tokens (puro, con tests)
+  agent-flow/
+    policy.ts         Riesgo por herramienta × autonomía de la tarea (puro, con tests)
+    lease.ts          Plazos de lease y de aprobación; falla cerrado (puro, con tests)
+  mcp/
+    protocol.ts       Envoltorio JSON-RPC 2.0 y MCP (puro, con tests)
+    tools-flow.ts     Las 13 herramientas del flujo con humano en medio
+    tools-workspace.ts Las de siempre, intactas; create/update_task sí pasan por el filtro
+    index.ts          Catálogo único y despacho
   api/                Helpers HTTP, errores, parseo de filtros
   auth/               Hash de contraseñas (Argon2id), sesiones y tokens de agente
   capture.ts          Parser de lenguaje natural (puro, con tests)
@@ -157,6 +188,8 @@ lib/
     client.ts         Pool de Postgres (perezoso)
   domain/             Reglas de negocio: proyectos, tareas, notas, agentes, delegaciones,
                       runs, comentarios, actividad, webhooks y bus de eventos
+    claims.ts         Lease de tareas: reclamar, renovar, soltar y barrer lo vencido
+    approvals.ts      La puerta: crear, listar, decidir y caducar aprobaciones
   realtime.ts         Bus de eventos en proceso para SSE
   openapi.ts          Descripción OpenAPI, construida con APP_BASE_URL
   webhook.ts          Catálogo de eventos y emparejamiento de suscripciones (puro, con tests)
@@ -171,7 +204,7 @@ lib/
   zip.ts              Escritor de ZIP mínimo, sin dependencias (puro, con tests)
   env.ts              Validación de variables de entorno con Zod
 mcp/
-  agentdesk-mcp.mjs   Servidor MCP sin dependencias (JSON-RPC por stdio)
+  agentdesk-mcp.mjs   Puente stdio hacia /api/mcp, sin catálogo propio
 scripts/
   migrate.ts          Runner de migraciones (se empaqueta en la imagen)
   reset-password.ts   Cambio de contraseña sin SMTP (se empaqueta en la imagen)
@@ -181,6 +214,7 @@ scripts/
   restore.sh          Restauración destructiva, con copia previa de seguridad
   seed.sh             Datos de ejemplo (proyectos, tareas, notas, agente y run)
   webhook-receiver.mjs Receptor de referencia que verifica la firma
+  task-runner.mjs     Runner de referencia para cron: una pasada por invocación
   verify.sh           Comprobación de extremo a extremo
   smoke.sh            Prueba de humo de la API
 Dockerfile            Build multi-stage, multi-arquitectura

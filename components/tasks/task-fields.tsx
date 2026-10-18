@@ -15,12 +15,14 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
+  TASK_AUTONOMIES,
+  TASK_AUTONOMY_META,
   TASK_PRIORITIES,
   TASK_PRIORITY_META,
   TASK_STATUSES,
   TASK_STATUS_META,
 } from '@/lib/constants';
-import type { TaskPriorityValue, TaskStatusValue } from '@/lib/constants';
+import type { TaskAutonomyValue, TaskPriorityValue, TaskStatusValue } from '@/lib/constants';
 import { describeRecurrence, parseRecurrence } from '@/lib/recurrence';
 import type { LabelDTO, ProjectDTO } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -291,6 +293,45 @@ export function RecurrenceField({
         {options.map((option) => (
           <SelectItem key={option.value} value={option.value} className="text-xs">
             {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/**
+ * How much the agent working this task may do by itself.
+ *
+ * It sits with the other task fields rather than with the agent, because the
+ * same agent can be trusted to close a chore and still have to ask before
+ * touching anything that leaves the machine. The hint is shown because
+ * "do_with_approval" means nothing to someone reading it for the first time.
+ */
+export function AutonomySelect({
+  value,
+  onChange,
+  className,
+}: {
+  value: TaskAutonomyValue;
+  onChange: (value: TaskAutonomyValue) => void;
+  className?: string;
+}) {
+  return (
+    <Select value={value} onValueChange={(next) => onChange(next as TaskAutonomyValue)}>
+      <SelectTrigger className={cn('h-8 gap-2 text-xs', className)} aria-label="Autonomía">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {TASK_AUTONOMIES.map((autonomy) => (
+          <SelectItem key={autonomy} value={autonomy} className="text-xs">
+            <span className="flex items-center gap-2">
+              <span
+                className={cn('size-2 shrink-0 rounded-full', TASK_AUTONOMY_META[autonomy].dot)}
+                aria-hidden
+              />
+              {TASK_AUTONOMY_META[autonomy].label}
+            </span>
           </SelectItem>
         ))}
       </SelectContent>

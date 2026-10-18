@@ -20,6 +20,9 @@ const REFRESH_TYPES = [
   'run.updated',
   'run.artifact',
   'delegation.updated',
+  'approval.requested',
+  'approval.decided',
+  'task.claimed',
   'activity',
 ];
 

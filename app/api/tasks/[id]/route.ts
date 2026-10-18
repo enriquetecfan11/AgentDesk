@@ -51,21 +51,29 @@ export async function PATCH(request: Request, { params }: Context) {
     if (labelsParsed.success) await setTaskLabels(id, labelsParsed.data.labelIds);
 
     const statusChanged = input.status !== undefined && input.status !== before.status;
+    // Worth its own entry: it is the setting that decides what an agent may do
+    // on this task without asking, so "who widened this, and when" has to be
+    // answerable from the timeline.
+    const autonomyChanged = input.autonomy !== undefined && input.autonomy !== before.autonomy;
 
     await logActivity({
       actor: { type: 'human', id: user.id, name: user.name },
       action: recurrenceAdvanced
         ? 'task.recurred'
-        : statusChanged
-          ? 'task.status_changed'
-          : 'task.updated',
+        : autonomyChanged
+          ? 'task.autonomy_changed'
+          : statusChanged
+            ? 'task.status_changed'
+            : 'task.updated',
       entityType: 'task',
       entityId: task.id,
       meta: recurrenceAdvanced
         ? { title: task.title, from: recurrenceAdvanced.from, to: recurrenceAdvanced.to }
-        : statusChanged
-          ? { from: before.status, to: task.status, title: task.title }
-          : { fields: Object.keys(input), title: task.title },
+        : autonomyChanged
+          ? { title: task.title, from: before.autonomy, to: task.autonomy }
+          : statusChanged
+            ? { from: before.status, to: task.status, title: task.title }
+            : { fields: Object.keys(input), title: task.title },
     });
 
     return json({ task: await getTask(task.id), recurrenceAdvanced });

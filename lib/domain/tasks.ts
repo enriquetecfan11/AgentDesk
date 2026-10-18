@@ -1,13 +1,15 @@
 import 'server-only';
 
-import { and, asc, desc, eq, gte, ilike, inArray, isNull, lte, ne, sql } from 'drizzle-orm';
+import { aliasedTable, and, asc, desc, eq, gte, ilike, inArray, isNull, lte, ne, sql } from 'drizzle-orm';
 
 import { db } from '@/lib/db/client';
 import {
+  agents,
   labels,
   projects,
   taskLabels,
   tasks,
+  users,
   type TaskPriority,
   type TaskStatus,
 } from '@/lib/db/schema';
@@ -35,6 +37,13 @@ export type TaskFilters = {
   search?: string;
   limit?: number;
   orderBy?: 'manual' | 'dueDate' | 'created' | 'priority';
+  /**
+   * Hide tasks another agent currently holds a live lease on.
+   *
+   * What makes a queue safe to hand to two runners at once: a task somebody
+   * is already working is not available work, however it is assigned.
+   */
+  notLeasedByOthers?: string;
 };
 
 const PRIORITY_RANK: Record<TaskPriority, number> = {
@@ -44,6 +53,9 @@ const PRIORITY_RANK: Record<TaskPriority, number> = {
   low: 3,
   none: 4,
 };
+
+const taskAssigneeAgents = aliasedTable(agents, 'task_assignee_agents');
+const taskAssigneeUsers = aliasedTable(users, 'task_assignee_users');
 
 /**
  * Core task query. Labels and subtask counters are fetched in two extra
@@ -68,6 +80,14 @@ export async function listTasks(filters: TaskFilters = {}): Promise<TaskDTO[]> {
     conditions.push(isNull(tasks.projectId));
     conditions.push(isNull(tasks.dueDate));
   }
+  if (filters.notLeasedByOthers) {
+    conditions.push(
+      sql`(${tasks.claimedByAgentId} is null
+           or ${tasks.claimedByAgentId} = ${filters.notLeasedByOthers}
+           or ${tasks.leaseExpiresAt} is null
+           or ${tasks.leaseExpiresAt} < now())`,
+    );
+  }
 
   const orderBy = (() => {
     switch (filters.orderBy) {
@@ -91,9 +111,15 @@ export async function listTasks(filters: TaskFilters = {}): Promise<TaskDTO[]> {
         identifier: projects.identifier,
         color: projects.color,
       },
+      claimedByAgentName: agents.name,
+      assigneeAgentName: taskAssigneeAgents.name,
+      assigneeUserName: taskAssigneeUsers.name,
     })
     .from(tasks)
     .leftJoin(projects, eq(projects.id, tasks.projectId))
+    .leftJoin(agents, eq(agents.id, tasks.claimedByAgentId))
+    .leftJoin(taskAssigneeAgents, and(eq(tasks.assigneeType, 'agent'), eq(taskAssigneeAgents.id, tasks.assigneeId)))
+    .leftJoin(taskAssigneeUsers, and(eq(tasks.assigneeType, 'human'), eq(taskAssigneeUsers.id, tasks.assigneeId)))
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(...orderBy)
     .limit(filters.limit ?? 500);
@@ -145,6 +171,8 @@ export async function listTasks(filters: TaskFilters = {}): Promise<TaskDTO[]> {
       labels: labelsByTask.get(row.task.id) ?? [],
       subtaskTotal: subtasks.total,
       subtaskDone: subtasks.done,
+      claimedByAgentName: row.claimedByAgentName,
+      assigneeName: row.assigneeAgentName ?? row.assigneeUserName,
     });
   });
 
@@ -165,9 +193,15 @@ export async function getTask(id: string): Promise<TaskDTO | null> {
         identifier: projects.identifier,
         color: projects.color,
       },
+      claimedByAgentName: agents.name,
+      assigneeAgentName: taskAssigneeAgents.name,
+      assigneeUserName: taskAssigneeUsers.name,
     })
     .from(tasks)
     .leftJoin(projects, eq(projects.id, tasks.projectId))
+    .leftJoin(agents, eq(agents.id, tasks.claimedByAgentId))
+    .leftJoin(taskAssigneeAgents, and(eq(tasks.assigneeType, 'agent'), eq(taskAssigneeAgents.id, tasks.assigneeId)))
+    .leftJoin(taskAssigneeUsers, and(eq(tasks.assigneeType, 'human'), eq(taskAssigneeUsers.id, tasks.assigneeId)))
     .where(eq(tasks.id, id))
     .limit(1);
 
@@ -188,6 +222,8 @@ export async function getTask(id: string): Promise<TaskDTO | null> {
     labels: labelRows,
     subtaskTotal: subtasks.length,
     subtaskDone: subtasks.filter((subtask) => subtask.status === 'done').length,
+    claimedByAgentName: row.claimedByAgentName,
+    assigneeName: row.assigneeAgentName ?? row.assigneeUserName,
   });
 }
 
@@ -237,6 +273,7 @@ export async function createTask(input: TaskCreateInput): Promise<TaskDTO> {
       dueDate,
       dueTime: input.dueTime ?? null,
       recurrence: input.recurrence ?? null,
+      autonomy: input.autonomy ?? 'do_with_approval',
       sortOrder,
       completedAt: input.status === 'done' ? new Date() : null,
     })
@@ -284,6 +321,7 @@ export async function updateTask(
   if (input.dueTime !== undefined) patch.dueTime = input.dueTime ?? null;
   if (input.recurrence !== undefined) patch.recurrence = input.recurrence ?? null;
   if (input.sortOrder !== undefined) patch.sortOrder = input.sortOrder;
+  if (input.autonomy !== undefined) patch.autonomy = input.autonomy;
 
   if (input.status !== undefined) {
     const rule = parseRecurrence(current.recurrence);

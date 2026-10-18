@@ -56,7 +56,7 @@ en jueves vence el lunes siguiente.
 | `Ctrl`/`⌘` + `K` | Paleta de comandos |
 | `C` | Captura rápida desde cualquier pantalla |
 | `?` | Ayuda de atajos |
-| `G` y después `I` `H` `U` `T` `P` `N` `A` `B` `R` `S` | Ir a Inbox, Hoy, Próximas, Tareas, Proyectos, Notas, Actividad, Agentes, Runs, Ajustes |
+| `G` y después `I` `H` `U` `T` `P` `N` `V` `B` `R` `A` `S` | Ir a Inbox, Hoy, Próximas, Tareas, Proyectos, Notas, Aprobaciones, Agentes, Runs, Actividad, Ajustes |
 
 Los atajos de una sola letra se ignoran mientras escribes en un campo de texto, así que nunca
 te llevan a otra página a mitad de una frase.
@@ -64,6 +64,66 @@ te llevan a otra página a mitad de una frase.
 La paleta (`⌘K`) hace tres cosas: busca tareas y proyectos en el servidor, navega y ejecuta
 acciones (tema, cerrar sesión, ayuda). Si en lugar de buscar escribes una frase y pulsas Intro,
 crea la tarea con la misma gramática de la captura rápida.
+
+---
+
+## Trabajar con un agente
+
+El circuito es siempre el mismo: **una tarea entra en el Inbox, un agente la revisa, y propone
+hacerla él o pasársela a otro. Nada con consecuencias pasa sin que tú lo apruebes.**
+
+1. **Creas la tarea** como cualquier otra, con la captura rápida o a mano.
+2. **Se activa**, a mano (le dices a un agente que la revise) o por cron, con
+   `scripts/task-runner.mjs`.
+3. **El agente la reclama.** Queda reservada para él durante quince minutos: solo un agente a la
+   vez trabaja una tarea. En el panel de detalle ves quién la tiene y cuánto le queda.
+4. **Propone.** Si cree que le toca a otro, propone delegarla; si cree que puede hacerla él, pide
+   permiso para ejecutar. En los dos casos **no hace nada todavía**: aparece en **Aprobaciones**.
+5. **Tú decides**, y hasta entonces no pasa nada.
+
+### La autonomía de una tarea
+
+Cada tarea decide cuánto puede hacer el agente sin preguntar. Se cambia en su panel de detalle:
+
+| Autonomía | Qué permite |
+|---|---|
+| **Solo propone** | Leer, comentar y proponer. Cualquier cambio pasa por ti, incluso tomar la tarea |
+| **Trabaja y pide permiso** (por defecto) | Avanza la tarea; delegar, ejecutar, enviar o borrar espera tu visto bueno |
+| **Autónomo en lo de bajo riesgo** | También parte la tarea en subtareas sin avisar |
+
+Lo que sale de AgentDesk —delegar, ejecutar, enviar, borrar— **pide permiso siempre**, en las
+tres. Esa columna decide cuánto papeleo quieres, no si cedes esa autoridad.
+
+### La bandeja de Aprobaciones
+
+Se abre con `G` `V` o desde la barra lateral, que lleva el número de lo que está esperando.
+Cada entrada enseña **los argumentos exactos** que te está pidiendo el agente, tal cual, sin
+resumir: lo que apruebas es eso.
+
+Puedes **aprobar**, **aprobar cambiando los argumentos** (el agente usará los tuyos, y los suyos
+se conservan al lado) o **rechazar con un motivo**, que es obligatorio porque el agente lo recibe
+y actúa con él. El campo de motivo sirve también para responderle a una pregunta.
+
+Cuatro cosas que conviene saber:
+
+- **AgentDesk no ejecuta lo que apruebas.** Aprobar «ejecuta este comando» le dice al agente que
+  ya puede ejecutarlo él. Lo único que hace AgentDesk por su cuenta es lo que es suyo de
+  principio a fin: aprobar una propuesta de delegación crea la delegación de verdad.
+- **Una aprobación caduca a las 24 horas, y caducar cuenta como rechazar.** Si prefieres no
+  decidir, no decidir es decir no.
+- **Una decisión no se cambia.** Una vez aprobada o rechazada, se queda; volver a decidirla da un
+  error. Lo que sí puedes es hablarlo con el agente comentando en la tarea.
+- **Un agente no aprueba lo suyo.** No hay forma de que lo haga: la decisión solo se puede tomar
+  desde la web, con tu sesión.
+
+### Cuando un agente se cuelga
+
+La reserva caduca. Pasados quince minutos sin señales, la tarea **vuelve a «Por hacer»** y la
+puede coger otro —y queda apuntado en **Actividad**, así que se ve que pasó. Si una tarea va y
+viene de la cola, el contador de veces que se ha tomado (en su panel de detalle) lo delata.
+
+Todo lo que hace un agente queda en **Actividad**, con el filtro Personas / Agentes: lo que
+tomó, lo que hizo con aviso, lo que pidió y lo que le dijiste.
 
 ---
 

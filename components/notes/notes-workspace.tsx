@@ -355,6 +355,7 @@ export function NotesWorkspace({
           <EmptyPane
             hasNotes={notes.length > 0}
             onCreate={() => void createNote()}
+            onCreateTemplate={(title) => void createNote(title)}
             onImport={() => setImportOpen(true)}
           />
         )}
@@ -368,10 +369,12 @@ export function NotesWorkspace({
 function EmptyPane({
   hasNotes,
   onCreate,
+  onCreateTemplate,
   onImport,
 }: {
   hasNotes: boolean;
   onCreate: () => void;
+  onCreateTemplate: (title: string) => void;
   onImport: () => void;
 }) {
   return (
@@ -395,6 +398,21 @@ function EmptyPane({
             Importar
           </Button>
         </div>
+        {!hasNotes && (
+          <div className="flex flex-wrap justify-center gap-1.5 pt-1">
+            {['Nota de proyecto', 'Decisión', 'Brief para agente'].map((template) => (
+              <Button
+                key={template}
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-[11px] text-muted-foreground"
+                onClick={() => onCreateTemplate(template)}
+              >
+                {template}
+              </Button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

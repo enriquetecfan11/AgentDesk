@@ -1,7 +1,13 @@
+import {
+  approvalDecisionFor,
+  approvalSecondsLeft,
+  leaseSecondsLeft,
+} from '@/lib/agent-flow/lease';
 import type {
   ActivityEntry,
   Agent,
   ApiToken,
+  Approval,
   Artifact,
   Delegation,
   Label,
@@ -17,6 +23,7 @@ import type {
   AgentDTO,
   AgentRef,
   ApiTokenDTO,
+  ApprovalDTO,
   ArtifactDTO,
   DelegationDTO,
   LabelDTO,
@@ -43,6 +50,10 @@ export type TaskSource = Task & {
   labels?: LabelRef[];
   subtaskTotal?: number;
   subtaskDone?: number;
+  /** Name of the agent holding the lease, when the query joined it in. */
+  claimedByAgentName?: string | null;
+  /** Display name of the current task assignee, when assigned. */
+  assigneeName?: string | null;
 };
 
 export function serializeTask(task: TaskSource): TaskDTO {
@@ -56,6 +67,7 @@ export function serializeTask(task: TaskSource): TaskDTO {
     parentTaskId: task.parentTaskId,
     assigneeType: task.assigneeType,
     assigneeId: task.assigneeId,
+    assigneeName: task.assigneeName ?? null,
     dueDate: task.dueDate,
     dueTime: task.dueTime,
     recurrence: task.recurrence,
@@ -67,6 +79,64 @@ export function serializeTask(task: TaskSource): TaskDTO {
     labels: task.labels ?? [],
     subtaskTotal: task.subtaskTotal ?? 0,
     subtaskDone: task.subtaskDone ?? 0,
+    autonomy: task.autonomy,
+    claimedByAgentId: task.claimedByAgentId,
+    claimedByAgentName: task.claimedByAgentName ?? null,
+    leaseExpiresAt: iso(task.leaseExpiresAt),
+    heartbeatAt: iso(task.heartbeatAt),
+    claimCount: task.claimCount,
+    // Computed rather than stored: a countdown goes stale the moment it is
+    // written, and the UI needs it fresh on every render.
+    leaseSecondsLeft: leaseSecondsLeft(task),
+  };
+}
+
+export type ApprovalSource = Approval & {
+  task?: { id: string; title: string; status: TaskDTO['status'] } | null;
+  agent?: AgentRef | null;
+  decidedByUserName?: string | null;
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+/**
+ * The `decision` field is where fail-closed becomes visible to the caller: an
+ * approval whose deadline has gone by reports `rejected`, so neither the agent
+ * nor the UI has to remember the rule.
+ */
+export function serializeApproval(approval: ApprovalSource): ApprovalDTO {
+  const expiresAt = iso(approval.expiresAt) ?? new Date(0).toISOString();
+
+  return {
+    id: approval.id,
+    taskId: approval.taskId,
+    agentId: approval.agentId,
+    runId: approval.runId,
+    tool: approval.tool,
+    risk: approval.risk,
+    status: approval.status,
+    title: approval.title,
+    summary: approval.summary,
+    payload: asRecord(approval.payload),
+    payloadEdited:
+      approval.payloadEdited === null || approval.payloadEdited === undefined
+        ? null
+        : asRecord(approval.payloadEdited),
+    reason: approval.reason,
+    decidedByUserId: approval.decidedByUserId,
+    decidedByUserName: approval.decidedByUserName ?? null,
+    decidedAt: iso(approval.decidedAt),
+    expiresAt,
+    createdAt: iso(approval.createdAt) ?? new Date(0).toISOString(),
+    updatedAt: iso(approval.updatedAt) ?? new Date(0).toISOString(),
+    secondsLeft: approvalSecondsLeft(approval),
+    decision: approvalDecisionFor(approval),
+    task: approval.task ?? null,
+    agent: approval.agent ?? null,
   };
 }
 

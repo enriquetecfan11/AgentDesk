@@ -183,7 +183,14 @@ export async function getQueue(agentId: string): Promise<QueueDTO | null> {
 
   const [queueDelegations, assignedTasks] = await Promise.all([
     listDelegations({ agentId, actionableOnly: true, limit: 100 }),
-    listTasks({ assigneeType: 'agent', assigneeId: agentId, limit: 100 }),
+    // `notLeasedByOthers` is what makes the queue safe for two runners: a task
+    // another agent is holding is not work this one can pick up.
+    listTasks({
+      assigneeType: 'agent',
+      assigneeId: agentId,
+      notLeasedByOthers: agentId,
+      limit: 100,
+    }),
   ]);
 
   return {

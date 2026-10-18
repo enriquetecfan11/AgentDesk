@@ -43,7 +43,7 @@
   --secondary: 228 11% 15%;
   --secondary-foreground: 224 12% 90%;
   --muted: 228 11% 15%;
-  --muted-foreground: 224 8% 55%;
+  --muted-foreground: 224 8% 69%;
   --accent: 214 95% 58%;
   --accent-foreground: 0 0% 100%;
   --accent-muted: 214 60% 22%;
@@ -55,7 +55,7 @@
   --input: 228 10% 19%;
   --ring: 214 95% 58%;
   --sidebar: 228 14% 7%;
-  --sidebar-foreground: 224 10% 62%;
+  --sidebar-foreground: 224 10% 76%;
   --sidebar-active: 228 10% 14%;
 }
 
@@ -73,6 +73,11 @@
   }
   ::selection {
     background: hsl(var(--accent) / 0.25);
+  }
+
+  ::placeholder {
+    color: hsl(var(--muted-foreground));
+    opacity: 1;
   }
 
   /*

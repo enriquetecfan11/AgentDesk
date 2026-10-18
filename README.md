@@ -46,6 +46,7 @@ Las ocho fases están terminadas, verificadas y desplegadas en local: **191 prue
 | 6 | Webhooks, OpenAPI, servidor MCP | ✅ |
 | 7 | Backup/restore y guía de migración Mac mini → Proxmox | ✅ |
 | 8 | Tests, accesibilidad, rendimiento, README final | ✅ |
+| 9 | Flujo con humano en medio: MCP en `/api/mcp`, lease de tareas, aprobaciones, autonomía y runner para cron | ✅ |
 
 ---
 
@@ -120,17 +121,26 @@ móvil.
 | **Notas** | Markdown con `[[wikilinks]]` y backlinks resueltos en el servidor; import/export compatible con un vault de Obsidian |
 | **Agentes** | Ficha propia, token con scopes, cola de trabajo, historial de runs y aprobación o rechazo de delegaciones |
 | **Runs** | Detalle en vivo con logs en streaming y artefactos (texto, URL o fichero) |
+| **Aprobaciones** | Lo que un agente quiere hacer y no puede hacer solo, con sus argumentos exactos: apruebas, editas los argumentos o rechazas con un motivo que el agente recibe |
 | **Actividad** | Una sola cronología con lo que haces tú y lo que hacen los agentes |
 
-**La API** son dos superficies distintas: 42 endpoints para el humano (cookie de sesión) y 15 para
+**La API** son dos superficies distintas: 44 endpoints para el humano (cookie de sesión) y 15 para
 los agentes bajo `/api/v1` (`Authorization: Bearer agt_…`, un token por agente con scopes). Zod
 valida todo lo que entra, los tokens se guardan solo como hash y cada acción de un agente queda en
 la cronología.
 
 **Las salidas** van hacia donde tú quieras: webhooks firmados con HMAC-SHA256 hacia n8n o
 cualquier cosa, `GET /api/openapi.json` con la especificación OpenAPI 3.1 y un servidor MCP sin
-dependencias con 18 herramientas, para que un modelo use AgentDesk como si fuera una herramienta
-más.
+dependencias en `POST /api/mcp` con 29 herramientas, para que un modelo use AgentDesk como si
+fuera una herramienta más.
+
+**Un agente no decide nada irreversible.** Una tarea entra en el Inbox, el agente la reclama con
+un lease —un solo agente a la vez, y solo durante quince minutos— y propone: delegarla en otro
+agente, o ejecutarla él. Las dos cosas se quedan en **Aprobaciones** con sus argumentos exactos
+hasta que tú decides. Cada tarea lleva su propia autonomía (`suggest_only`,
+`do_with_approval`, `autonomous_low_risk`), y lo que sale de AgentDesk pide permiso en las tres.
+Falla cerrado: una aprobación caducada cuenta como rechazada, una decisión no se sobrescribe y
+ningún agente aprueba lo suyo.
 
 ---
 

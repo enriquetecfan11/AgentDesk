@@ -16,6 +16,7 @@ import {
   PlayCircle,
   Plus,
   Settings,
+  ShieldCheck,
   Sun,
   type LucideIcon,
 } from 'lucide-react';
@@ -47,6 +48,7 @@ export const NAVIGATION: { href: string; label: string; icon: LucideIcon; keys?:
   { href: '/tasks', label: 'Tareas', icon: ListChecks, keys: 'G T' },
   { href: '/projects', label: 'Proyectos', icon: FolderKanban, keys: 'G P' },
   { href: '/notes', label: 'Notas', icon: NotebookPen, keys: 'G N' },
+  { href: '/approvals', label: 'Aprobaciones', icon: ShieldCheck, keys: 'G V' },
   { href: '/activity', label: 'Actividad', icon: Activity, keys: 'G A' },
   { href: '/agents', label: 'Agentes', icon: Bot, keys: 'G B' },
   { href: '/runs', label: 'Runs', icon: PlayCircle, keys: 'G R' },
