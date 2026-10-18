@@ -74,6 +74,40 @@
   ::selection {
     background: hsl(var(--accent) / 0.25);
   }
+
+  /*
+   * Visible focus everywhere, including the plain links and rows that do not
+   * carry a Tailwind ring class. Components that draw their own ring opt out
+   * with `focus-visible:outline-none`, which lands in the utilities layer and
+   * therefore wins over this base rule.
+   */
+  a:focus-visible,
+  button:focus-visible,
+  select:focus-visible,
+  summary:focus-visible,
+  textarea:focus-visible,
+  input:focus-visible,
+  [role='button']:focus-visible,
+  [role='tab']:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+}
+
+/*
+ * Respect the system setting. Nothing here depends on motion, so turning it
+ * off costs nothing: it only removes the transitions between states.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Compact app scrollbars */

@@ -3,9 +3,9 @@ import { Database, ShieldCheck, UserRound } from 'lucide-react';
 import { WebhooksSettings } from '@/components/webhooks/webhooks-settings';
 import { requireUser } from '@/lib/auth/session';
 import { PASSWORD_MIN_LENGTH } from '@/lib/constants';
-import { listProjects } from '@/lib/domain/projects';
-import { listLabels } from '@/lib/domain/labels';
-import { listTasks } from '@/lib/domain/tasks';
+import { countLabels } from '@/lib/domain/labels';
+import { countProjects } from '@/lib/domain/projects';
+import { countTasks } from '@/lib/domain/tasks';
 import { listWebhooks } from '@/lib/domain/webhooks';
 import { getEnv } from '@/lib/env';
 
@@ -15,10 +15,12 @@ export default async function SettingsPage() {
   const user = await requireUser();
   const env = getEnv();
 
-  const [projects, labels, tasks, webhooks] = await Promise.all([
-    listProjects({ includeArchived: true }),
-    listLabels(),
-    listTasks({ limit: 5000 }),
+  // Counts, not lists: this screen shows numbers, so counting in SQL avoids
+  // loading every task (with its labels and project) just to read `.length`.
+  const [taskCount, projectCount, labelCount, webhooks] = await Promise.all([
+    countTasks(),
+    countProjects(),
+    countLabels(),
     listWebhooks(),
   ]);
 
@@ -42,9 +44,9 @@ export default async function SettingsPage() {
           Contenido
         </h2>
         <dl className="divide-y divide-border rounded-lg border border-border text-sm">
-          <Row label="Tareas" value={String(tasks.length)} />
-          <Row label="Proyectos" value={String(projects.length)} />
-          <Row label="Etiquetas" value={String(labels.length)} />
+          <Row label="Tareas" value={String(taskCount)} />
+          <Row label="Proyectos" value={String(projectCount)} />
+          <Row label="Etiquetas" value={String(labelCount)} />
         </dl>
       </section>
 

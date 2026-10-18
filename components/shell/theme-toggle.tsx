@@ -36,7 +36,7 @@ export function ThemeToggle({ className }: { className?: string }) {
         <Button
           variant="ghost"
           size="icon"
-          className={cn('size-9 text-sidebar-foreground hover:bg-sidebar-active', className)}
+          className={cn('size-11 text-sidebar-foreground hover:bg-sidebar-active md:size-9', className)}
           aria-label="Cambiar tema"
         >
           <Icon className="size-4" />

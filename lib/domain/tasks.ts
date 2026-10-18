@@ -340,3 +340,15 @@ export async function countOpenTasks(): Promise<number> {
     .where(and(ne(tasks.status, 'done'), ne(tasks.status, 'cancelled')));
   return row?.value ?? 0;
 }
+
+/**
+ * Total number of tasks, done and pending.
+ *
+ * For screens that only show a number, counting in SQL is much cheaper than
+ * listing every row just to read `.length` — a list would load up to a few
+ * thousand full rows (with their labels and project) to throw them away.
+ */
+export async function countTasks(): Promise<number> {
+  const [row] = await db.select({ value: sql<number>`count(*)`.mapWith(Number) }).from(tasks);
+  return row?.value ?? 0;
+}

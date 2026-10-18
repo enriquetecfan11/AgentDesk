@@ -103,7 +103,7 @@ export function AppSidebarNav({
                     onClick={onNavigate}
                     aria-current={active ? 'page' : undefined}
                     className={cn(
-                      'group flex min-h-9 items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors',
+                      'group flex min-h-11 items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors md:min-h-9',
                       'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent',
                       active
                         ? 'bg-sidebar-active text-white'
@@ -131,7 +131,8 @@ export function AppSidebarNav({
           href="/settings"
           onClick={onNavigate}
           className={cn(
-            'flex min-h-9 items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors',
+            'flex min-h-11 items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors md:min-h-9',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent',
             pathname === '/settings'
               ? 'bg-sidebar-active text-white'
               : 'text-sidebar-foreground hover:bg-sidebar-active/60 hover:text-white',
@@ -159,7 +160,7 @@ export function AppSidebarNav({
             onClick={signOut}
             disabled={signingOut}
             aria-label="Cerrar sesión"
-            className="size-9 text-sidebar-foreground hover:bg-sidebar-active hover:text-white"
+            className="size-11 text-sidebar-foreground hover:bg-sidebar-active hover:text-white md:size-9"
           >
             <LogOut className="size-4" />
           </Button>

@@ -28,6 +28,12 @@ export async function listProjects(options: { includeArchived?: boolean } = {}):
   );
 }
 
+/** Cheaper than `listProjects().length`: no joins, no per-project task counts. */
+export async function countProjects(): Promise<number> {
+  const [row] = await db.select({ value: sql<number>`count(*)`.mapWith(Number) }).from(projects);
+  return row?.value ?? 0;
+}
+
 export async function getProject(id: string): Promise<ProjectDTO | null> {
   const [row] = await db
     .select({

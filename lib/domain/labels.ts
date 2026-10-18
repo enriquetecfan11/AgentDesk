@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { asc, eq, inArray } from 'drizzle-orm';
+import { asc, eq, inArray, sql } from 'drizzle-orm';
 
 import { db } from '@/lib/db/client';
 import { labels, taskLabels, type Label } from '@/lib/db/schema';
@@ -44,6 +44,12 @@ export async function createLabel(input: LabelCreateInput): Promise<LabelDTO> {
 export async function deleteLabel(id: string): Promise<boolean> {
   const rows = await db.delete(labels).where(eq(labels.id, id)).returning({ id: labels.id });
   return rows.length > 0;
+}
+
+/** Cheaper than `listLabels().length`, which also counts label usage. */
+export async function countLabels(): Promise<number> {
+  const [row] = await db.select({ value: sql<number>`count(*)`.mapWith(Number) }).from(labels);
+  return row?.value ?? 0;
 }
 
 /** Used by quick capture, which invents labels like `#wazuh` on the fly. */

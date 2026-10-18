@@ -34,7 +34,7 @@ export function Topbar({ user }: { user: { name: string; email: string } }) {
           variant="outline"
           size="sm"
           onClick={openCommandPalette}
-          className="h-8 w-8 gap-2 px-0 text-muted-foreground sm:w-56 sm:justify-start sm:px-3"
+          className="h-11 w-11 gap-2 px-0 text-muted-foreground sm:h-8 sm:w-56 sm:justify-start sm:px-3"
           aria-label="Buscar o ejecutar un comando"
         >
           <Search className="size-3.5 shrink-0" />
@@ -47,7 +47,7 @@ export function Topbar({ user }: { user: { name: string; email: string } }) {
         <Button
           size="sm"
           onClick={openCapture}
-          className="h-8 w-8 gap-1.5 px-0 sm:w-auto sm:px-3"
+          className="h-11 w-11 gap-1.5 px-0 sm:h-8 sm:w-auto sm:px-3"
           aria-label="Captura rápida"
           title="Captura rápida (C)"
         >

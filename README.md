@@ -28,6 +28,7 @@ Todo corre en tu propia máquina. Sin servicios externos, sin cuentas, sin telem
 - [Agentes y API v1](#agentes-y-api-v1)
 - [Webhooks, OpenAPI y MCP](#webhooks-openapi-y-mcp)
 - [Copias de seguridad y migración](#copias-de-seguridad-y-migración)
+- [Accesibilidad y rendimiento](#accesibilidad-y-rendimiento)
 - [Pruebas](#pruebas)
 - [Desarrollo](#desarrollo)
 - [Base de datos y migraciones](#base-de-datos-y-migraciones)
@@ -46,7 +47,7 @@ Todo corre en tu propia máquina. Sin servicios externos, sin cuentas, sin telem
 | 5 | Agentes, tokens, API REST v1, delegaciones, runs, SSE | ✅ |
 | 6 | Webhooks, OpenAPI, servidor MCP | ✅ |
 | 7 | Backup/restore y guía de migración Mac mini → Proxmox | ✅ |
-| 8 | Tests, accesibilidad, rendimiento, README final | ⏳ |
+| 8 | Tests, accesibilidad, rendimiento, README final | ✅ |
 
 ---
 
@@ -985,6 +986,61 @@ construcción. Se puede repetir: si encuentra el proyecto de ejemplo, avisa y se
 
 ---
 
+## Accesibilidad y rendimiento
+
+La aplicación está hecha para usarse a diario desde el ordenador y, a menudo, desde el móvil. Eso
+son dos listas de comprobaciones, no un apartado decorativo.
+
+### Accesibilidad
+
+- **HTML semántico y un solo `h1` por pantalla.** El título de la barra superior es el `h1`; los
+  bloques usan `h2`/`h3`, y los formularios etiquetas `label` de verdad, asociadas al campo.
+- **Enlace «Saltar al contenido».** Es lo primero que recibe el foco al tabular, así que no hay que
+  atravesar las diez entradas de la barra lateral para llegar a la página.
+- **Foco siempre visible.** Los componentes que dibujan su propio anillo lo declaran; el resto
+  heredan un `outline` de 2 px definido una sola vez en `app/globals.css`. Nunca se apaga el foco
+  sin poner algo en su lugar.
+- **Diálogos con nombre, aunque no se vea.** Radix exige un título para anunciar el diálogo; la
+  paleta de comandos no tiene uno visible, así que lleva un `DialogTitle` con `sr-only`. Igual con
+  la navegación móvil, que se anuncia como «Navegación».
+- **Estado, no solo color.** La página activa lleva `aria-current="page"`, las prioridades y los
+  estados tienen icono y texto alternativo, y los botones que solo son un icono llevan
+  `aria-label`.
+- **Objetivos táctiles de 44 px en móvil.** Las entradas de la barra lateral, el botón de tema, el
+  de cerrar sesión y los dos de la barra superior miden 44 px por debajo de `md` y vuelven a su
+  tamaño compacto en escritorio (`min-h-11 md:min-h-9`), que es donde importa la densidad.
+- **`prefers-reduced-motion` respetado.** Si el sistema pide menos movimiento, las transiciones se
+  reducen a cero. No hay ninguna animación de la que dependa la interfaz, así que no se pierde nada.
+- **Teclado de principio a fin.** `⌘K`/`Ctrl+K` abre la paleta, `C` captura, `G` luego la inicial
+  navega, `?` enseña los atajos y `Escape` cierra cualquier diálogo.
+
+### Rendimiento
+
+El objetivo no es ganar una carrera de milisegundos, sino que la aplicación no se degrade cuando
+haya miles de tareas. Las decisiones que lo sostienen:
+
+- **Contar es una consulta, no una lista.** Ajustes mostraba tres números contando en memoria las
+  listas completas de tareas, proyectos y etiquetas; ahora cada número es un `count(*)`. La
+  diferencia se nota cuando el listado pasa de unos cientos de filas.
+- **Índices para lo que se consulta a diario.** El esquema define índices sobre las claves foráneas
+  y sobre las columnas de filtro —`tasks.status`, `tasks.due_date`, `tasks.project_id`,
+  `activity_log.created_at`, `runs.status`—, que son las que aparecen en cada carga de pantalla.
+- **Un solo canal de eventos.** El shell abre un único `EventSource` (`/api/events`) para todos los
+  cambios en vivo, con `router.refresh()` agrupado cada 400 ms. Los `run.log` no viajan por ahí:
+  son demasiado ruidosos y llegan por su propia petición al abrir el detalle del run.
+- **Sin dependencias de más.** La paleta de componentes se recortó a lo que se usa (quince
+  primitivas en total): cada fichero que se borra es una dependencia de Radix menos que instalar y
+  analizar en cada `npm ci`.
+- **Los listados tienen tope, y el tope está escrito.** Tareas y notas 500, runs y artefactos 200,
+  actividad 300. Es un espacio de trabajo personal: por debajo de esos números entra todo
+  en una consulta y sobran; por encima, un listado paginado no es lo que resuelve el problema. Se
+  prefieren límites explícitos a consultas que crecen con el uso.
+- **Los cuerpos grandes no viajan enteros.** El listado de notas manda un extracto de 140
+  caracteres en lugar del Markdown completo, y los ficheros se quedan en el volumen `uploads`: la
+  lista lleva su tamaño y su URL de descarga, no sus bytes.
+
+---
+
 ## Pruebas
 
 ```bash
@@ -992,6 +1048,10 @@ npm test              # Vitest: lógica de dominio y validación (rápido, sin b
 npm run typecheck     # tsc --noEmit, en modo estricto
 ./scripts/smoke.sh    # Prueba de humo de la API contra una instalación en marcha
 ```
+
+Ahora mismo: **191 pruebas unitarias en 12 ficheros** y **134 comprobaciones** en la prueba de humo,
+todas en verde. Se ejecutan sin red y sin Postgres las primeras, y contra la instalación real las
+segundas.
 
 Las pruebas unitarias no tocan la base de datos: cubren lo que se puede equivocar sin
 infraestructura (parseo de fechas locales, filtros de la API, esquemas de validación, la captura
