@@ -59,6 +59,95 @@
   --sidebar-active: 228 10% 14%;
 }
 
+/* Swagger UI follows the same application theme as the public API docs page. */
+.api-docs {
+  min-height: calc(100dvh - 3.5rem);
+  padding: 1rem;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.api-docs .swagger-ui {
+  color: hsl(var(--foreground));
+  font-family: inherit;
+}
+
+.api-docs .swagger-ui .topbar {
+  display: none;
+}
+
+.api-docs .swagger-ui .information-container,
+.api-docs .swagger-ui .scheme-container {
+  background: transparent;
+  box-shadow: none;
+}
+
+.api-docs .swagger-ui .info .title,
+.api-docs .swagger-ui .opblock-tag,
+.api-docs .swagger-ui .opblock-tag small,
+.api-docs .swagger-ui .model-title,
+.api-docs .swagger-ui label,
+.api-docs .swagger-ui table thead tr th,
+.api-docs .swagger-ui table thead tr td,
+.api-docs .swagger-ui .parameter__name,
+.api-docs .swagger-ui .parameter__type,
+.api-docs .swagger-ui .response-col_status,
+.api-docs .swagger-ui .response-col_links,
+.api-docs .swagger-ui .model,
+.api-docs .swagger-ui .prop-type,
+.api-docs .swagger-ui .prop-format {
+  color: hsl(var(--foreground));
+}
+
+.api-docs .swagger-ui .opblock-tag,
+.api-docs .swagger-ui .model-box,
+.api-docs .swagger-ui section.models,
+.api-docs .swagger-ui .responses-inner,
+.api-docs .swagger-ui .response-col_description__inner {
+  border-color: hsl(var(--border));
+}
+
+.api-docs .swagger-ui .opblock,
+.api-docs .swagger-ui section.models,
+.api-docs .swagger-ui .model-box,
+.api-docs .swagger-ui .responses-inner {
+  background: hsl(var(--card));
+}
+
+.api-docs .swagger-ui .opblock .opblock-summary-description,
+.api-docs .swagger-ui .opblock-description-wrapper,
+.api-docs .swagger-ui .opblock-description-wrapper p,
+.api-docs .swagger-ui .response-col_description,
+.api-docs .swagger-ui .markdown p,
+.api-docs .swagger-ui .markdown li {
+  color: hsl(var(--muted-foreground));
+}
+
+.api-docs .swagger-ui input,
+.api-docs .swagger-ui textarea,
+.api-docs .swagger-ui select {
+  border-color: hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.api-docs .swagger-ui .btn {
+  border-color: hsl(var(--border));
+  color: hsl(var(--foreground));
+}
+
+.api-docs .swagger-ui .microlight,
+.api-docs .swagger-ui pre.microlight {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+@media (min-width: 768px) {
+  .api-docs {
+    padding: 1.5rem 2rem;
+  }
+}
+
 @layer base {
   * {
     @apply border-border;

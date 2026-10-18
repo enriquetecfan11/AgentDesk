@@ -1,12 +1,7 @@
-/**
- * The OpenAPI description of the agent API (`/api/v1`).
- *
- * Written by hand rather than generated: the DTOs are small, and a generator
- * would need a build step in the image for something that only ever leaves the
- * server as JSON. It is served at `/api/openapi.json` (no auth: it describes the
- * shape of the API, not its data) so a client can be pointed at the live URL and
- * pick up the right `servers` entry from `APP_BASE_URL`.
- */
+/** Public OpenAPI document shared by the API documentation and API clients. */
+import { z } from 'zod';
+import * as validation from '@/lib/validation';
+import { humanPaths } from '@/lib/openapi-human';
 
 type Json = Record<string, unknown>;
 
@@ -292,18 +287,26 @@ const taskIdParam: Json = {
   schema: { type: 'string', format: 'uuid' },
 };
 
-export function buildOpenApi(baseUrl: string): Json {
-  return {
+// Input mode preserves optional defaults and omits output-only transformations.
+// Custom refinements remain enforced by the very same Zod schemas in handlers.
+export function inputSchema(schema: z.ZodType): Json {
+  const { $schema, ...json } = z.toJSONSchema(schema, { io: 'input' });
+  return json;
+}
+
+export function buildOpenApi(baseUrl: string) {
+  const document = {
     openapi: '3.1.0',
     info: {
-      title: 'AgentDesk — API de agentes',
+      title: 'AgentDesk — API',
       version: '1.0.0',
       summary: 'Workspace operativo self-hosted para una persona y sus agentes de IA.',
       description: [
         'API para que los agentes trabajen sobre AgentDesk: leer su cola, mover tareas,',
         'escribir notas, aceptar delegaciones y reportar ejecuciones.',
         '',
-        'Autenticación: `Authorization: Bearer agt_…`. Hay un token por agente, con scopes.',
+        'Humano: cookie de sesión `ad_session`, obtenida con `/api/auth/login` o setup.',
+        'Agentes: `Authorization: Bearer agt_…`. Hay un token por agente, con scopes.',
         'Escribir implica leer en la misma área (`tasks:write` concede `tasks:read`), `*` concede',
         'todo y un `403` siempre dice qué scope falta.',
         '',
@@ -322,16 +325,7 @@ export function buildOpenApi(baseUrl: string): Json {
       ].join('\n'),
     },
     servers: [{ url: baseUrl, description: 'Según APP_BASE_URL' }],
-    tags: [
-      { name: 'Identidad', description: 'Quién soy y qué puedo hacer.' },
-      { name: 'Cola', description: 'Qué me toca hacer.' },
-      { name: 'Tareas' },
-      { name: 'Proyectos' },
-      { name: 'Notas' },
-      { name: 'Delegaciones' },
-      { name: 'Runs' },
-      { name: 'Tiempo real' },
-    ],
+    tags: [{ name: 'Humano', description: 'API de la aplicación, con cookie de sesión.' }, { name: 'Agentes', description: 'API de agentes, con token Bearer y scopes.' }],
     security: [{ bearerAuth: [] }],
     paths: {
       '/api/v1/me': {
@@ -747,6 +741,7 @@ export function buildOpenApi(baseUrl: string): Json {
     },
     components: {
       securitySchemes: {
+        cookieAuth: { type: 'apiKey', in: 'cookie', name: 'ad_session', description: 'Cookie HttpOnly emitida por login/setup. En el navegador inicia sesión para probar las operaciones.' },
         bearerAuth: {
           type: 'http',
           scheme: 'bearer',
@@ -807,47 +802,8 @@ export function buildOpenApi(baseUrl: string): Json {
           },
         },
         TaskList: listOf('tasks', 'Task'),
-        TaskCreate: {
-          type: 'object',
-          required: ['title'],
-          properties: {
-            title: { type: 'string', maxLength: 500 },
-            description: { type: 'string', nullable: true },
-            status: { type: 'string', enum: ['backlog', 'todo', 'in_progress', 'review', 'done', 'cancelled'] },
-            priority: { type: 'string', enum: ['none', 'low', 'normal', 'high', 'urgent'] },
-            projectId: { type: 'string', format: 'uuid', nullable: true },
-            parentTaskId: { type: 'string', format: 'uuid', nullable: true },
-            assigneeType: { type: 'string', enum: ['human', 'agent'], nullable: true },
-            assigneeId: { type: 'string', format: 'uuid', nullable: true },
-            dueDate: { type: 'string', format: 'date', nullable: true },
-            dueTime: { type: 'string', nullable: true },
-            recurrence: { type: 'string', nullable: true },
-            autonomy: {
-              type: 'string',
-              enum: ['suggest_only', 'do_with_approval', 'autonomous_low_risk'],
-              description: 'Por defecto `do_with_approval`.',
-            },
-            labelIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
-          },
-        },
-        TaskUpdate: {
-          description: 'Cualquier subconjunto de TaskCreate, más `sortOrder`.',
-          type: 'object',
-          properties: {
-            title: { type: 'string' },
-            description: { type: 'string', nullable: true },
-            status: { type: 'string' },
-            priority: { type: 'string' },
-            projectId: { type: 'string', format: 'uuid', nullable: true },
-            parentTaskId: { type: 'string', format: 'uuid', nullable: true },
-            assigneeType: { type: 'string', enum: ['human', 'agent'], nullable: true },
-            assigneeId: { type: 'string', format: 'uuid', nullable: true },
-            dueDate: { type: 'string', format: 'date', nullable: true },
-            dueTime: { type: 'string', nullable: true },
-            recurrence: { type: 'string', nullable: true },
-            sortOrder: { type: 'number' },
-          },
-        },
+        TaskCreate: inputSchema(validation.taskCreateSchema),
+        TaskUpdate: inputSchema(validation.taskUpdateSchema),
         Comment: {
           type: 'object',
           properties: {
@@ -869,29 +825,14 @@ export function buildOpenApi(baseUrl: string): Json {
             comments: { type: 'array', items: { $ref: '#/components/schemas/Comment' } },
           },
         },
-        CommentCreate: {
-          type: 'object',
-          required: ['body'],
-          properties: { body: { type: 'string', maxLength: 20000 } },
-        },
+        CommentCreate: inputSchema(validation.commentCreateSchema),
         Project: projectSchema,
         ProjectEnvelope: {
           type: 'object',
           properties: { project: { $ref: '#/components/schemas/Project' } },
         },
         ProjectList: listOf('projects', 'Project'),
-        ProjectCreate: {
-          type: 'object',
-          required: ['name'],
-          properties: {
-            name: { type: 'string' },
-            identifier: { type: 'string', nullable: true, description: 'Hasta 6 letras o números.' },
-            description: { type: 'string', nullable: true },
-            status: { type: 'string', enum: ['active', 'paused', 'completed', 'archived'] },
-            color: { type: 'string', nullable: true },
-            targetDate: { type: 'string', format: 'date', nullable: true },
-          },
-        },
+        ProjectCreate: inputSchema(validation.projectCreateSchema),
         Note: noteSchema,
         NoteEnvelope: {
           type: 'object',
@@ -906,53 +847,16 @@ export function buildOpenApi(baseUrl: string): Json {
           },
         },
         NoteList: listOf('notes', 'Note'),
-        NoteCreate: {
-          type: 'object',
-          required: ['title'],
-          properties: {
-            title: { type: 'string' },
-            contentMd: { type: 'string' },
-            projectId: { type: 'string', format: 'uuid', nullable: true },
-            taskId: { type: 'string', format: 'uuid', nullable: true },
-          },
-        },
-        NoteUpdate: {
-          type: 'object',
-          properties: {
-            title: { type: 'string' },
-            contentMd: { type: 'string' },
-            projectId: { type: 'string', format: 'uuid', nullable: true },
-            taskId: { type: 'string', format: 'uuid', nullable: true },
-          },
-        },
+        NoteCreate: inputSchema(validation.noteCreateSchema),
+        NoteUpdate: inputSchema(validation.noteUpdateSchema),
         Delegation: delegationSchema,
         DelegationEnvelope: {
           type: 'object',
           properties: { delegation: { $ref: '#/components/schemas/Delegation' } },
         },
         DelegationList: listOf('delegations', 'Delegation'),
-        DelegationCreate: {
-          type: 'object',
-          required: ['toAgentId', 'title'],
-          properties: {
-            toAgentId: { type: 'string', format: 'uuid' },
-            title: { type: 'string' },
-            instructions: { type: 'string', nullable: true },
-            taskId: { type: 'string', format: 'uuid', nullable: true },
-            requiresApproval: { type: 'boolean', default: false },
-          },
-        },
-        DelegationUpdate: {
-          type: 'object',
-          required: ['status'],
-          properties: {
-            status: {
-              type: 'string',
-              enum: ['pending', 'accepted', 'in_progress', 'completed', 'failed', 'rejected', 'cancelled'],
-            },
-            note: { type: 'string', nullable: true, description: 'Se añade como comentario.' },
-          },
-        },
+        DelegationCreate: inputSchema(validation.delegationCreateSchema),
+        DelegationUpdate: inputSchema(validation.delegationUpdateSchema),
         Run: runSchema,
         RunEnvelope: { type: 'object', properties: { run: { $ref: '#/components/schemas/Run' } } },
         RunList: listOf('runs', 'Run'),
@@ -964,49 +868,14 @@ export function buildOpenApi(baseUrl: string): Json {
             artifacts: { type: 'array', items: { $ref: '#/components/schemas/Artifact' } },
           },
         },
-        RunCreate: {
-          type: 'object',
-          properties: {
-            taskId: { type: 'string', format: 'uuid', nullable: true },
-            delegationId: { type: 'string', format: 'uuid', nullable: true },
-            status: { type: 'string', enum: ['queued', 'running'], default: 'queued' },
-            input: { nullable: true },
-          },
-        },
-        RunUpdate: {
-          type: 'object',
-          properties: {
-            status: { type: 'string', enum: ['queued', 'running', 'succeeded', 'failed', 'cancelled'] },
-            output: { type: 'string', nullable: true },
-            error: { type: 'string', nullable: true },
-            costUsd: { type: 'number', nullable: true },
-            input: { nullable: true },
-          },
-        },
+        RunCreate: inputSchema(validation.runCreateSchema),
+        RunUpdate: inputSchema(validation.runUpdateSchema),
         RunLog: runLogSchema,
         RunLogList: {
           type: 'object',
           properties: { logs: { type: 'array', items: { $ref: '#/components/schemas/RunLog' } } },
         },
-        RunLogCreate: {
-          type: 'object',
-          properties: {
-            level: { type: 'string', enum: ['debug', 'info', 'warn', 'error'], default: 'info' },
-            message: { type: 'string' },
-            logs: {
-              type: 'array',
-              description: 'Alternativa a `message`: un lote de hasta 500 líneas.',
-              items: {
-                type: 'object',
-                required: ['message'],
-                properties: {
-                  level: { type: 'string', enum: ['debug', 'info', 'warn', 'error'] },
-                  message: { type: 'string' },
-                },
-              },
-            },
-          },
-        },
+        RunLogCreate: inputSchema(z.union([validation.runLogCreateSchema, validation.runLogBatchSchema])),
         RunLogBatchResult: {
           type: 'object',
           properties: {
@@ -1023,19 +892,7 @@ export function buildOpenApi(baseUrl: string): Json {
           type: 'object',
           properties: { artifacts: { type: 'array', items: { $ref: '#/components/schemas/Artifact' } } },
         },
-        ArtifactCreate: {
-          type: 'object',
-          required: ['name'],
-          properties: {
-            name: { type: 'string' },
-            kind: { type: 'string', enum: ['file', 'text', 'url'], default: 'text' },
-            mimeType: { type: 'string', nullable: true },
-            content: { type: 'string', nullable: true, description: 'Para kind = text o url.' },
-            contentBase64: { type: 'string', nullable: true, description: 'Para kind = file.' },
-            runId: { type: 'string', format: 'uuid', nullable: true },
-            taskId: { type: 'string', format: 'uuid', nullable: true },
-          },
-        },
+        ArtifactCreate: inputSchema(validation.artifactCreateSchema),
         Queue: {
           type: 'object',
           properties: {
@@ -1063,4 +920,11 @@ export function buildOpenApi(baseUrl: string): Json {
       },
     },
   };
+  for (const item of Object.values(document.paths)) {
+    for (const operation of Object.values(item)) {
+      operation.tags = ['Agentes'];
+      Object.assign(operation, { security: [{ bearerAuth: [] }] });
+    }
+  }
+  return { ...document, paths: { ...document.paths, ...humanPaths() } };
 }

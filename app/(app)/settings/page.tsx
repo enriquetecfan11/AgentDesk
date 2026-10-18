@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Database, ShieldCheck, UserRound } from 'lucide-react';
 
 import { WebhooksSettings } from '@/components/webhooks/webhooks-settings';
@@ -60,6 +61,10 @@ export default async function SettingsPage() {
         <dl className="divide-y divide-border rounded-lg border border-border text-sm">
           <Row label="URL base" value={env.APP_BASE_URL} mono />
           <Row label="Directorio de subidas" value={env.UPLOADS_DIR} mono />
+          <div className="flex items-center justify-between gap-4 px-3 py-2">
+            <dt className="text-muted-foreground">Documentación de la API</dt>
+            <dd><Link href="/docs" className="text-sm underline underline-offset-4">Abrir documentación</Link></dd>
+          </div>
           <Row label="Especificación de la API" value="/api/openapi.json" mono />
           <Row label="Entorno" value={env.NODE_ENV} mono />
         </dl>
