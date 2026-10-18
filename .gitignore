@@ -19,6 +19,8 @@
 
 # runtime data
 /uploads
+# Copias de seguridad: llevan la base de datos entera (hashes incluidos).
+/backups
 
 # misc
 .DS_Store
