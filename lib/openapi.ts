@@ -1,0 +1,982 @@
+/**
+ * The OpenAPI description of the agent API (`/api/v1`).
+ *
+ * Written by hand rather than generated: the DTOs are small, and a generator
+ * would need a build step in the image for something that only ever leaves the
+ * server as JSON. It is served at `/api/openapi.json` (no auth: it describes the
+ * shape of the API, not its data) so a client can be pointed at the live URL and
+ * pick up the right `servers` entry from `APP_BASE_URL`.
+ */
+
+type Json = Record<string, unknown>;
+
+const errorSchema: Json = {
+  type: 'object',
+  required: ['error'],
+  properties: {
+    error: { type: 'string', description: 'Mensaje legible en español.' },
+    details: {
+      description: 'Detalle del fallo: issues de Zod, o el scope que falta.',
+      nullable: true,
+    },
+  },
+};
+
+const agentSchema: Json = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    name: { type: 'string' },
+    description: { type: 'string', nullable: true },
+    capabilities: { type: 'array', items: { type: 'string' } },
+    status: { type: 'string', enum: ['active', 'paused', 'archived'] },
+  },
+};
+
+const taskSchema: Json = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    title: { type: 'string' },
+    description: { type: 'string', nullable: true },
+    status: {
+      type: 'string',
+      enum: ['backlog', 'todo', 'in_progress', 'review', 'done', 'cancelled'],
+    },
+    priority: { type: 'string', enum: ['none', 'low', 'normal', 'high', 'urgent'] },
+    projectId: { type: 'string', format: 'uuid', nullable: true },
+    parentTaskId: { type: 'string', format: 'uuid', nullable: true },
+    assigneeType: { type: 'string', enum: ['human', 'agent'], nullable: true },
+    assigneeId: { type: 'string', format: 'uuid', nullable: true },
+    dueDate: { type: 'string', format: 'date', nullable: true },
+    dueTime: { type: 'string', nullable: true, description: 'HH:MM' },
+    recurrence: { type: 'string', nullable: true, description: 'Fragmento RRULE reducido.' },
+    sortOrder: { type: 'number' },
+    completedAt: { type: 'string', format: 'date-time', nullable: true },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+    project: { nullable: true, type: 'object' },
+    labels: { type: 'array', items: { type: 'object' } },
+    subtaskTotal: { type: 'integer' },
+    subtaskDone: { type: 'integer' },
+  },
+};
+
+const projectSchema: Json = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    identifier: { type: 'string', nullable: true },
+    name: { type: 'string' },
+    description: { type: 'string', nullable: true },
+    status: { type: 'string', enum: ['active', 'paused', 'completed', 'archived'] },
+    color: { type: 'string', nullable: true },
+    targetDate: { type: 'string', format: 'date', nullable: true },
+    milestones: { type: 'array', items: { type: 'object' } },
+    archivedAt: { type: 'string', format: 'date-time', nullable: true },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+    taskTotal: { type: 'integer' },
+    taskDone: { type: 'integer' },
+  },
+};
+
+const noteSchema: Json = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    title: { type: 'string', description: 'También es la identidad del wikilink.' },
+    contentMd: { type: 'string' },
+    source: { type: 'string', enum: ['app', 'obsidian'] },
+    projectId: { type: 'string', format: 'uuid', nullable: true },
+    taskId: { type: 'string', format: 'uuid', nullable: true },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+  },
+};
+
+const delegationSchema: Json = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    fromType: { type: 'string', enum: ['human', 'agent', 'system'] },
+    fromId: { type: 'string', format: 'uuid', nullable: true },
+    toAgentId: { type: 'string', format: 'uuid' },
+    taskId: { type: 'string', format: 'uuid', nullable: true },
+    title: { type: 'string' },
+    instructions: { type: 'string', nullable: true },
+    status: {
+      type: 'string',
+      enum: ['pending', 'accepted', 'in_progress', 'completed', 'failed', 'rejected', 'cancelled'],
+    },
+    requiresApproval: { type: 'boolean' },
+    approvedAt: { type: 'string', format: 'date-time', nullable: true },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+    agent: { nullable: true, type: 'object' },
+    task: { nullable: true, type: 'object' },
+  },
+};
+
+const runSchema: Json = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    agentId: { type: 'string', format: 'uuid' },
+    taskId: { type: 'string', format: 'uuid', nullable: true },
+    delegationId: { type: 'string', format: 'uuid', nullable: true },
+    status: {
+      type: 'string',
+      enum: ['queued', 'running', 'succeeded', 'failed', 'cancelled'],
+    },
+    input: { nullable: true, description: 'JSON libre: lo que el agente recibió.' },
+    output: { type: 'string', nullable: true },
+    error: { type: 'string', nullable: true },
+    startedAt: { type: 'string', format: 'date-time', nullable: true },
+    finishedAt: {
+      type: 'string',
+      format: 'date-time',
+      nullable: true,
+      description: 'Lo sella el servidor, nunca el agente.',
+    },
+    durationMs: { type: 'integer', nullable: true },
+    costUsd: { type: 'number', nullable: true },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+    logCount: { type: 'integer' },
+    artifactCount: { type: 'integer' },
+  },
+};
+
+const runLogSchema: Json = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    runId: { type: 'string', format: 'uuid' },
+    level: { type: 'string', enum: ['debug', 'info', 'warn', 'error'] },
+    message: { type: 'string' },
+    createdAt: { type: 'string', format: 'date-time' },
+  },
+};
+
+const artifactSchema: Json = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    runId: { type: 'string', format: 'uuid', nullable: true },
+    taskId: { type: 'string', format: 'uuid', nullable: true },
+    name: { type: 'string' },
+    kind: { type: 'string', enum: ['file', 'text', 'url'] },
+    mimeType: { type: 'string', nullable: true },
+    sizeBytes: { type: 'integer', nullable: true },
+    content: { type: 'string', nullable: true, description: 'Solo para kind = text.' },
+    downloadUrl: {
+      type: 'string',
+      nullable: true,
+      description: 'Solo para kind = file.',
+    },
+    createdAt: { type: 'string', format: 'date-time' },
+  },
+};
+
+/** `{ <property>: [ <Ref> ] }`, the shape every list endpoint answers with. */
+function listOf(property: string, ref: string): Json {
+  return {
+    type: 'object',
+    required: [property],
+    properties: {
+      [property]: { type: 'array', items: { $ref: `#/components/schemas/${ref}` } },
+    },
+  };
+}
+
+/** `?from=&to=` style filters, described once. */
+const taskFilters: Json[] = [
+  { name: 'status', in: 'query', schema: { type: 'string' } },
+  { name: 'priority', in: 'query', schema: { type: 'string' } },
+  { name: 'projectId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+  { name: 'assigneeType', in: 'query', schema: { type: 'string', enum: ['human', 'agent'] } },
+  { name: 'assigneeId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+  { name: 'dueBefore', in: 'query', schema: { type: 'string', format: 'date' } },
+  { name: 'search', in: 'query', schema: { type: 'string' } },
+];
+
+const jsonBody = (ref: string) => ({
+  required: true,
+  content: { 'application/json': { schema: { $ref: `#/components/schemas/${ref}` } } },
+});
+
+const jsonResponse = (description: string, ref: string) => ({
+  description,
+  content: { 'application/json': { schema: { $ref: `#/components/schemas/${ref}` } } },
+});
+
+const errors = {
+  401: { $ref: '#/components/responses/Unauthorized' },
+  403: { $ref: '#/components/responses/Forbidden' },
+  404: { $ref: '#/components/responses/NotFound' },
+  422: { $ref: '#/components/responses/Invalid' },
+};
+
+const taskIdParam: Json = {
+  name: 'id',
+  in: 'path',
+  required: true,
+  schema: { type: 'string', format: 'uuid' },
+};
+
+export function buildOpenApi(baseUrl: string): Json {
+  return {
+    openapi: '3.1.0',
+    info: {
+      title: 'AgentDesk — API de agentes',
+      version: '1.0.0',
+      summary: 'Workspace operativo self-hosted para una persona y sus agentes de IA.',
+      description: [
+        'API para que los agentes trabajen sobre AgentDesk: leer su cola, mover tareas,',
+        'escribir notas, aceptar delegaciones y reportar ejecuciones.',
+        '',
+        'Autenticación: `Authorization: Bearer agt_…`. Hay un token por agente, con scopes.',
+        'Escribir implica leer en la misma área (`tasks:write` concede `tasks:read`), `*` concede',
+        'todo y un `403` siempre dice qué scope falta.',
+        '',
+        'Los agentes solo ven lo suyo: sus runs, sus delegaciones y su cola.',
+      ].join('\n'),
+    },
+    servers: [{ url: baseUrl, description: 'Según APP_BASE_URL' }],
+    tags: [
+      { name: 'Identidad', description: 'Quién soy y qué puedo hacer.' },
+      { name: 'Cola', description: 'Qué me toca hacer.' },
+      { name: 'Tareas' },
+      { name: 'Proyectos' },
+      { name: 'Notas' },
+      { name: 'Delegaciones' },
+      { name: 'Runs' },
+      { name: 'Tiempo real' },
+    ],
+    security: [{ bearerAuth: [] }],
+    paths: {
+      '/api/v1/me': {
+        get: {
+          tags: ['Identidad'],
+          operationId: 'getMe',
+          summary: 'Agente autenticado, sus scopes y sus contadores',
+          description: 'No exige ningún scope: sirve para comprobar que un token está bien montado.',
+          responses: { 200: jsonResponse('Agente autenticado', 'Me'), 401: errors[401] },
+        },
+      },
+      '/api/v1/queue': {
+        get: {
+          tags: ['Cola'],
+          operationId: 'getQueue',
+          summary: 'Delegaciones accionables y tareas asignadas',
+          description:
+            'Lo que un agente consulta al despertar. Requiere `delegations:read`. Una delegación que exige aprobación no aparece hasta que un humano la aprueba.',
+          responses: {
+            200: jsonResponse('Cola de trabajo', 'Queue'),
+            401: errors[401],
+            403: errors[403],
+          },
+        },
+      },
+      '/api/v1/tasks': {
+        get: {
+          tags: ['Tareas'],
+          operationId: 'listTasks',
+          summary: 'Lista de tareas',
+          description: 'Scope `tasks:read`.',
+          parameters: taskFilters,
+          responses: {
+            200: jsonResponse('Tareas', 'TaskList'),
+            401: errors[401],
+            403: errors[403],
+          },
+        },
+        post: {
+          tags: ['Tareas'],
+          operationId: 'createTask',
+          summary: 'Crea una tarea',
+          description:
+            'Scope `tasks:write`. Si no se indica otra cosa, la tarea queda asignada al propio agente, que es lo que la hace aparecer en su cola.',
+          requestBody: jsonBody('TaskCreate'),
+          responses: {
+            201: jsonResponse('Tarea creada', 'TaskEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            422: errors[422],
+          },
+        },
+      },
+      '/api/v1/tasks/{id}': {
+        get: {
+          tags: ['Tareas'],
+          operationId: 'getTask',
+          summary: 'Una tarea con sus subtareas',
+          parameters: [taskIdParam],
+          responses: {
+            200: jsonResponse('Tarea', 'TaskEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
+          },
+        },
+        patch: {
+          tags: ['Tareas'],
+          operationId: 'updateTask',
+          summary: 'Modifica una tarea',
+          description:
+            'Completar una tarea recurrente no la cierra: la adelanta a su siguiente ocurrencia y la respuesta lo indica en `recurrenceAdvanced`.',
+          parameters: [taskIdParam],
+          requestBody: jsonBody('TaskUpdate'),
+          responses: {
+            200: jsonResponse('Tarea actualizada', 'TaskEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
+            422: errors[422],
+          },
+        },
+        delete: {
+          tags: ['Tareas'],
+          operationId: 'deleteTask',
+          summary: 'Borra una tarea',
+          parameters: [taskIdParam],
+          responses: {
+            200: jsonResponse('Confirmación', 'Ok'),
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
+          },
+        },
+      },
+      '/api/v1/tasks/{id}/comments': {
+        get: {
+          tags: ['Tareas'],
+          operationId: 'listTaskComments',
+          summary: 'Comentarios de una tarea, en orden',
+          parameters: [taskIdParam],
+          responses: {
+            200: jsonResponse('Comentarios', 'CommentList'),
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
+          },
+        },
+        post: {
+          tags: ['Tareas'],
+          operationId: 'addTaskComment',
+          summary: 'Comenta en una tarea',
+          description:
+            'Los comentarios son entradas de actividad: quedan en la cronología unificada y no se pueden editar ni borrar.',
+          parameters: [taskIdParam],
+          requestBody: jsonBody('CommentCreate'),
+          responses: {
+            201: jsonResponse('Comentario creado', 'CommentEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
+            422: errors[422],
+          },
+        },
+      },
+      '/api/v1/projects': {
+        get: {
+          tags: ['Proyectos'],
+          operationId: 'listProjects',
+          summary: 'Lista de proyectos',
+          description: 'Scope `projects:read`.',
+          parameters: [
+            { name: 'includeArchived', in: 'query', schema: { type: 'boolean', default: false } },
+          ],
+          responses: {
+            200: jsonResponse('Proyectos', 'ProjectList'),
+            401: errors[401],
+            403: errors[403],
+          },
+        },
+        post: {
+          tags: ['Proyectos'],
+          operationId: 'createProject',
+          summary: 'Crea un proyecto',
+          description: 'Scope `projects:write`.',
+          requestBody: jsonBody('ProjectCreate'),
+          responses: {
+            201: jsonResponse('Proyecto creado', 'ProjectEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            422: errors[422],
+          },
+        },
+      },
+      '/api/v1/notes': {
+        get: {
+          tags: ['Notas'],
+          operationId: 'listNotes',
+          summary: 'Lista de notas',
+          description: 'Scope `notes:read`.',
+          parameters: [
+            { name: 'q', in: 'query', schema: { type: 'string' } },
+            { name: 'projectId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+          ],
+          responses: {
+            200: jsonResponse('Notas', 'NoteList'),
+            401: errors[401],
+            403: errors[403],
+          },
+        },
+        post: {
+          tags: ['Notas'],
+          operationId: 'createNote',
+          summary: 'Crea una nota',
+          description:
+            'Scope `notes:write`. El título es la identidad: dos notas no pueden llamarse igual (409).',
+          requestBody: jsonBody('NoteCreate'),
+          responses: {
+            201: jsonResponse('Nota creada', 'NoteEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            409: { $ref: '#/components/responses/Conflict' },
+            422: errors[422],
+          },
+        },
+      },
+      '/api/v1/notes/{id}': {
+        get: {
+          tags: ['Notas'],
+          operationId: 'getNote',
+          summary: 'Una nota con sus enlaces y backlinks',
+          parameters: [taskIdParam],
+          responses: {
+            200: jsonResponse('Nota', 'NoteDetailEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
+          },
+        },
+        patch: {
+          tags: ['Notas'],
+          operationId: 'updateNote',
+          summary: 'Edita una nota',
+          parameters: [taskIdParam],
+          requestBody: jsonBody('NoteUpdate'),
+          responses: {
+            200: jsonResponse('Nota actualizada', 'NoteDetailEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
+            409: { $ref: '#/components/responses/Conflict' },
+            422: errors[422],
+          },
+        },
+      },
+      '/api/v1/delegations': {
+        get: {
+          tags: ['Delegaciones'],
+          operationId: 'listDelegations',
+          summary: 'Mis delegaciones',
+          description: 'Scope `delegations:read`. Solo las dirigidas a este agente.',
+          parameters: [
+            {
+              name: 'status',
+              in: 'query',
+              schema: { type: 'string' },
+              description: 'Puede repetirse para pedir varios estados.',
+            },
+          ],
+          responses: {
+            200: jsonResponse('Delegaciones', 'DelegationList'),
+            401: errors[401],
+            403: errors[403],
+          },
+        },
+        post: {
+          tags: ['Delegaciones'],
+          operationId: 'createDelegation',
+          summary: 'Delega trabajo en otro agente',
+          description: 'Scope `delegations:write`.',
+          requestBody: jsonBody('DelegationCreate'),
+          responses: {
+            201: jsonResponse('Delegación creada', 'DelegationEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            422: errors[422],
+          },
+        },
+      },
+      '/api/v1/delegations/{id}': {
+        get: {
+          tags: ['Delegaciones'],
+          operationId: 'getDelegation',
+          summary: 'Una delegación propia',
+          parameters: [taskIdParam],
+          responses: {
+            200: jsonResponse('Delegación', 'DelegationEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
+          },
+        },
+        patch: {
+          tags: ['Delegaciones'],
+          operationId: 'updateDelegation',
+          summary: 'Acepta, avanza o cierra una delegación',
+          description:
+            'Aceptar o cerrar una delegación ajena devuelve 403. El `note` opcional se añade como comentario en la tarea asociada.',
+          parameters: [taskIdParam],
+          requestBody: jsonBody('DelegationUpdate'),
+          responses: {
+            200: jsonResponse('Delegación actualizada', 'DelegationEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
+            422: errors[422],
+          },
+        },
+      },
+      '/api/v1/runs': {
+        get: {
+          tags: ['Runs'],
+          operationId: 'listRuns',
+          summary: 'Mis ejecuciones',
+          description: 'Scope `runs:read`.',
+          parameters: [
+            { name: 'taskId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+            { name: 'status', in: 'query', schema: { type: 'string' } },
+          ],
+          responses: { 200: jsonResponse('Runs', 'RunList'), 401: errors[401], 403: errors[403] },
+        },
+        post: {
+          tags: ['Runs'],
+          operationId: 'createRun',
+          summary: 'Abre una ejecución',
+          description:
+            'Scope `runs:write`. Abrir un run sobre una delegación la pone en curso. Los tiempos los sella el servidor.',
+          requestBody: jsonBody('RunCreate'),
+          responses: {
+            201: jsonResponse('Run abierto', 'RunEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            422: errors[422],
+          },
+        },
+      },
+      '/api/v1/runs/{id}': {
+        get: {
+          tags: ['Runs'],
+          operationId: 'getRun',
+          summary: 'Un run con sus logs y artefactos',
+          parameters: [taskIdParam],
+          responses: {
+            200: jsonResponse('Detalle del run', 'RunDetail'),
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
+          },
+        },
+        patch: {
+          tags: ['Runs'],
+          operationId: 'updateRun',
+          summary: 'Actualiza o cierra una ejecución',
+          description: 'Cerrar el run con `succeeded` cierra su delegación como `completed`.',
+          parameters: [taskIdParam],
+          requestBody: jsonBody('RunUpdate'),
+          responses: {
+            200: jsonResponse('Run actualizado', 'RunEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
+            422: errors[422],
+          },
+        },
+      },
+      '/api/v1/runs/{id}/logs': {
+        get: {
+          tags: ['Runs'],
+          operationId: 'listRunLogs',
+          summary: 'Logs de una ejecución',
+          description: 'Con `since` (ISO) solo los posteriores, útil al reconectar.',
+          parameters: [
+            taskIdParam,
+            { name: 'since', in: 'query', schema: { type: 'string', format: 'date-time' } },
+          ],
+          responses: { 200: jsonResponse('Logs', 'RunLogList'), 401: errors[401], 403: errors[403] },
+        },
+        post: {
+          tags: ['Runs'],
+          operationId: 'appendRunLogs',
+          summary: 'Añade una línea o un lote de logs',
+          description: 'Acepta `{ logs: [...] }` o una sola línea `{ level, message }`.',
+          parameters: [taskIdParam],
+          requestBody: jsonBody('RunLogCreate'),
+          responses: {
+            201: jsonResponse('Logs añadidos', 'RunLogBatchResult'),
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
+            422: errors[422],
+          },
+        },
+      },
+      '/api/v1/runs/{id}/artifacts': {
+        get: {
+          tags: ['Runs'],
+          operationId: 'listRunArtifacts',
+          summary: 'Artefactos de una ejecución',
+          parameters: [taskIdParam],
+          responses: {
+            200: jsonResponse('Artefactos', 'ArtifactList'),
+            401: errors[401],
+            403: errors[403],
+          },
+        },
+        post: {
+          tags: ['Runs'],
+          operationId: 'createRunArtifact',
+          summary: 'Adjunta un artefacto de texto, URL o fichero',
+          description:
+            'Los ficheros viajan en base64 dentro del JSON (`contentBase64`, hasta 8 MB), para que un agente no necesite más que un cliente HTTP.',
+          parameters: [taskIdParam],
+          requestBody: jsonBody('ArtifactCreate'),
+          responses: {
+            201: jsonResponse('Artefacto adjuntado', 'ArtifactEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
+            422: errors[422],
+          },
+        },
+      },
+      '/api/v1/events': {
+        get: {
+          tags: ['Tiempo real'],
+          operationId: 'streamEvents',
+          summary: 'Flujo SSE de eventos',
+          description: [
+            'Server-Sent Events. Los eventos `run.*` llegan solo si son de los runs de este agente.',
+            'Los nombres de evento son `run.log`, `run.updated`, `run.artifact`, `delegation.updated`,',
+            '`task.changed`, `task.comment`, `note.changed` y `activity`; usa',
+            '`addEventListener(nombre, …)`, no `onmessage`. Un `: keep-alive` cada 25 s.',
+          ].join('\n'),
+          responses: {
+            200: {
+              description: 'Flujo abierto',
+              content: { 'text/event-stream': { schema: { type: 'string' } } },
+            },
+            401: errors[401],
+          },
+        },
+      },
+    },
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          description: 'Token de agente: `agt_` + 43 caracteres base64url.',
+        },
+      },
+      responses: {
+        Unauthorized: {
+          description: 'Falta el token, o es desconocido, revocado o caducado.',
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+        },
+        Forbidden: {
+          description: 'Token válido sin el scope necesario, o agente archivado.',
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+        },
+        NotFound: {
+          description: 'No existe (o el id no es un UUID).',
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+        },
+        Invalid: {
+          description: 'El cuerpo no pasa la validación.',
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+        },
+        Conflict: {
+          description: 'Choca con algo existente, por ejemplo un título de nota repetido.',
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+        },
+      },
+      schemas: {
+        Error: errorSchema,
+        Ok: {
+          type: 'object',
+          properties: { ok: { type: 'boolean' } },
+        },
+        Agent: agentSchema,
+        Me: {
+          type: 'object',
+          properties: {
+            agent: agentSchema,
+            scopes: { type: 'array', items: { type: 'string' } },
+            counts: { type: 'object' },
+          },
+        },
+        Task: taskSchema,
+        TaskEnvelope: {
+          type: 'object',
+          properties: {
+            task: { $ref: '#/components/schemas/Task' },
+            recurrenceAdvanced: {
+              nullable: true,
+              type: 'object',
+              properties: {
+                from: { type: 'string', format: 'date', nullable: true },
+                to: { type: 'string', format: 'date' },
+              },
+            },
+          },
+        },
+        TaskList: listOf('tasks', 'Task'),
+        TaskCreate: {
+          type: 'object',
+          required: ['title'],
+          properties: {
+            title: { type: 'string', maxLength: 500 },
+            description: { type: 'string', nullable: true },
+            status: { type: 'string', enum: ['backlog', 'todo', 'in_progress', 'review', 'done', 'cancelled'] },
+            priority: { type: 'string', enum: ['none', 'low', 'normal', 'high', 'urgent'] },
+            projectId: { type: 'string', format: 'uuid', nullable: true },
+            parentTaskId: { type: 'string', format: 'uuid', nullable: true },
+            assigneeType: { type: 'string', enum: ['human', 'agent'], nullable: true },
+            assigneeId: { type: 'string', format: 'uuid', nullable: true },
+            dueDate: { type: 'string', format: 'date', nullable: true },
+            dueTime: { type: 'string', nullable: true },
+            recurrence: { type: 'string', nullable: true },
+            labelIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
+          },
+        },
+        TaskUpdate: {
+          description: 'Cualquier subconjunto de TaskCreate, más `sortOrder`.',
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            description: { type: 'string', nullable: true },
+            status: { type: 'string' },
+            priority: { type: 'string' },
+            projectId: { type: 'string', format: 'uuid', nullable: true },
+            parentTaskId: { type: 'string', format: 'uuid', nullable: true },
+            assigneeType: { type: 'string', enum: ['human', 'agent'], nullable: true },
+            assigneeId: { type: 'string', format: 'uuid', nullable: true },
+            dueDate: { type: 'string', format: 'date', nullable: true },
+            dueTime: { type: 'string', nullable: true },
+            recurrence: { type: 'string', nullable: true },
+            sortOrder: { type: 'number' },
+          },
+        },
+        Comment: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            taskId: { type: 'string', format: 'uuid' },
+            authorType: { type: 'string', enum: ['human', 'agent', 'system'] },
+            authorName: { type: 'string' },
+            body: { type: 'string' },
+            createdAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        CommentEnvelope: {
+          type: 'object',
+          properties: { comment: { $ref: '#/components/schemas/Comment' } },
+        },
+        CommentList: {
+          type: 'object',
+          properties: {
+            comments: { type: 'array', items: { $ref: '#/components/schemas/Comment' } },
+          },
+        },
+        CommentCreate: {
+          type: 'object',
+          required: ['body'],
+          properties: { body: { type: 'string', maxLength: 20000 } },
+        },
+        Project: projectSchema,
+        ProjectEnvelope: {
+          type: 'object',
+          properties: { project: { $ref: '#/components/schemas/Project' } },
+        },
+        ProjectList: listOf('projects', 'Project'),
+        ProjectCreate: {
+          type: 'object',
+          required: ['name'],
+          properties: {
+            name: { type: 'string' },
+            identifier: { type: 'string', nullable: true, description: 'Hasta 6 letras o números.' },
+            description: { type: 'string', nullable: true },
+            status: { type: 'string', enum: ['active', 'paused', 'completed', 'archived'] },
+            color: { type: 'string', nullable: true },
+            targetDate: { type: 'string', format: 'date', nullable: true },
+          },
+        },
+        Note: noteSchema,
+        NoteEnvelope: {
+          type: 'object',
+          properties: { note: { $ref: '#/components/schemas/Note' } },
+        },
+        NoteDetailEnvelope: {
+          type: 'object',
+          properties: {
+            note: { $ref: '#/components/schemas/Note' },
+            links: { type: 'array', items: { type: 'object' } },
+            backlinks: { type: 'array', items: { type: 'object' } },
+          },
+        },
+        NoteList: listOf('notes', 'Note'),
+        NoteCreate: {
+          type: 'object',
+          required: ['title'],
+          properties: {
+            title: { type: 'string' },
+            contentMd: { type: 'string' },
+            projectId: { type: 'string', format: 'uuid', nullable: true },
+            taskId: { type: 'string', format: 'uuid', nullable: true },
+          },
+        },
+        NoteUpdate: {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            contentMd: { type: 'string' },
+            projectId: { type: 'string', format: 'uuid', nullable: true },
+            taskId: { type: 'string', format: 'uuid', nullable: true },
+          },
+        },
+        Delegation: delegationSchema,
+        DelegationEnvelope: {
+          type: 'object',
+          properties: { delegation: { $ref: '#/components/schemas/Delegation' } },
+        },
+        DelegationList: listOf('delegations', 'Delegation'),
+        DelegationCreate: {
+          type: 'object',
+          required: ['toAgentId', 'title'],
+          properties: {
+            toAgentId: { type: 'string', format: 'uuid' },
+            title: { type: 'string' },
+            instructions: { type: 'string', nullable: true },
+            taskId: { type: 'string', format: 'uuid', nullable: true },
+            requiresApproval: { type: 'boolean', default: false },
+          },
+        },
+        DelegationUpdate: {
+          type: 'object',
+          required: ['status'],
+          properties: {
+            status: {
+              type: 'string',
+              enum: ['pending', 'accepted', 'in_progress', 'completed', 'failed', 'rejected', 'cancelled'],
+            },
+            note: { type: 'string', nullable: true, description: 'Se añade como comentario.' },
+          },
+        },
+        Run: runSchema,
+        RunEnvelope: { type: 'object', properties: { run: { $ref: '#/components/schemas/Run' } } },
+        RunList: listOf('runs', 'Run'),
+        RunDetail: {
+          type: 'object',
+          properties: {
+            run: { $ref: '#/components/schemas/Run' },
+            logs: { type: 'array', items: { $ref: '#/components/schemas/RunLog' } },
+            artifacts: { type: 'array', items: { $ref: '#/components/schemas/Artifact' } },
+          },
+        },
+        RunCreate: {
+          type: 'object',
+          properties: {
+            taskId: { type: 'string', format: 'uuid', nullable: true },
+            delegationId: { type: 'string', format: 'uuid', nullable: true },
+            status: { type: 'string', enum: ['queued', 'running'], default: 'queued' },
+            input: { nullable: true },
+          },
+        },
+        RunUpdate: {
+          type: 'object',
+          properties: {
+            status: { type: 'string', enum: ['queued', 'running', 'succeeded', 'failed', 'cancelled'] },
+            output: { type: 'string', nullable: true },
+            error: { type: 'string', nullable: true },
+            costUsd: { type: 'number', nullable: true },
+            input: { nullable: true },
+          },
+        },
+        RunLog: runLogSchema,
+        RunLogList: {
+          type: 'object',
+          properties: { logs: { type: 'array', items: { $ref: '#/components/schemas/RunLog' } } },
+        },
+        RunLogCreate: {
+          type: 'object',
+          properties: {
+            level: { type: 'string', enum: ['debug', 'info', 'warn', 'error'], default: 'info' },
+            message: { type: 'string' },
+            logs: {
+              type: 'array',
+              description: 'Alternativa a `message`: un lote de hasta 500 líneas.',
+              items: {
+                type: 'object',
+                required: ['message'],
+                properties: {
+                  level: { type: 'string', enum: ['debug', 'info', 'warn', 'error'] },
+                  message: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        RunLogBatchResult: {
+          type: 'object',
+          properties: {
+            logs: { type: 'array', items: { $ref: '#/components/schemas/RunLog' } },
+            log: { $ref: '#/components/schemas/RunLog' },
+          },
+        },
+        Artifact: artifactSchema,
+        ArtifactEnvelope: {
+          type: 'object',
+          properties: { artifact: { $ref: '#/components/schemas/Artifact' } },
+        },
+        ArtifactList: {
+          type: 'object',
+          properties: { artifacts: { type: 'array', items: { $ref: '#/components/schemas/Artifact' } } },
+        },
+        ArtifactCreate: {
+          type: 'object',
+          required: ['name'],
+          properties: {
+            name: { type: 'string' },
+            kind: { type: 'string', enum: ['file', 'text', 'url'], default: 'text' },
+            mimeType: { type: 'string', nullable: true },
+            content: { type: 'string', nullable: true, description: 'Para kind = text o url.' },
+            contentBase64: { type: 'string', nullable: true, description: 'Para kind = file.' },
+            runId: { type: 'string', format: 'uuid', nullable: true },
+            taskId: { type: 'string', format: 'uuid', nullable: true },
+          },
+        },
+        Queue: {
+          type: 'object',
+          properties: {
+            agent: agentSchema,
+            delegations: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/Delegation' },
+            },
+            tasks: { type: 'array', items: { $ref: '#/components/schemas/Task' } },
+          },
+        },
+      },
+    },
+    'x-webhooks': {
+      description:
+        'AgentDesk también puede avisar hacia fuera. Se configuran en Ajustes y cada entrega va firmada con HMAC-SHA256.',
+      post: {
+        summary: 'Notificación de un evento',
+        description: [
+          'Cuerpo: `{ event, at, delivery, webhookId, data }`.',
+          'Cabeceras: `X-AgentDesk-Signature: t=<segundos>,v1=<hmac>`,',
+          '`X-AgentDesk-Event`, `X-AgentDesk-Delivery`.',
+          'La firma es `HMAC_SHA256(secreto, "<t>.<cuerpo>")` en hexadecimal.',
+        ].join(' '),
+      },
+    },
+  };
+}

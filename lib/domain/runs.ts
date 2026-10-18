@@ -7,7 +7,7 @@ import { db } from '@/lib/db/client';
 import { agents, artifacts, runs, runLogs, tasks } from '@/lib/db/schema';
 import { updateDelegationStatus } from '@/lib/domain/delegations';
 import { serializeArtifact, serializeRun, serializeRunLog } from '@/lib/domain/serialize';
-import { publish } from '@/lib/realtime';
+import { emitEvent } from '@/lib/domain/events';
 import { safeFileName, saveUpload, removeUpload, removeUploadDir } from '@/lib/storage';
 import type { ArtifactDTO, RunDTO, RunDetailDTO, RunLogDTO } from '@/lib/types';
 import type {
@@ -146,7 +146,7 @@ export async function createRun(input: CreateRunInput): Promise<RunDTO> {
   }
 
   const run = (await getRun(row.id))!;
-  publish('run.updated', { id: run.id, status: run.status, agentId: run.agentId });
+  emitEvent('run.updated', { id: run.id, status: run.status, agentId: run.agentId, run });
   return run;
 }
 
@@ -194,7 +194,7 @@ export async function updateRun(id: string, input: RunUpdateInput): Promise<RunD
     });
   }
 
-  publish('run.updated', { id: run.id, status: run.status, agentId: run.agentId });
+  emitEvent('run.updated', { id: run.id, status: run.status, agentId: run.agentId, run });
   return run;
 }
 
@@ -250,7 +250,7 @@ export async function appendRunLogs(
     .returning();
 
   const serialized = rows.map(serializeRunLog);
-  for (const log of serialized) publish('run.log', log);
+  for (const log of serialized) emitEvent('run.log', log);
 
   return serialized;
 }
@@ -320,12 +320,26 @@ export async function createArtifact(input: ArtifactCreateInput): Promise<Artifa
       .where(eq(artifacts.id, row.id))
       .returning();
 
-    publish('run.artifact', { id: stored.id, runId: stored.runId, name: stored.name });
-    return serializeArtifact(stored);
+    const storedArtifact = serializeArtifact(stored);
+    emitEvent('run.artifact', {
+      id: stored.id,
+      runId: stored.runId,
+      name: stored.name,
+      // The body stays out of the event: a payload is a notification, and an
+      // inline text artifact can be hundreds of kilobytes.
+      artifact: { ...storedArtifact, content: null },
+    });
+    return storedArtifact;
   }
 
-  publish('run.artifact', { id: row.id, runId: row.runId, name: row.name });
-  return serializeArtifact(row);
+  const artifact = serializeArtifact(row);
+  emitEvent('run.artifact', {
+    id: row.id,
+    runId: row.runId,
+    name: row.name,
+    artifact: { ...artifact, content: null },
+  });
+  return artifact;
 }
 
 export async function deleteArtifact(id: string): Promise<boolean> {

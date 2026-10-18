@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { isAgentScope } from '@/lib/agent-token';
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@/lib/constants';
 import { parseRecurrence } from '@/lib/recurrence';
+import { isWebhookPattern } from '@/lib/webhook';
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -319,6 +320,36 @@ export const commentCreateSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Webhooks
+// ---------------------------------------------------------------------------
+
+const webhookUrl = z
+  .string()
+  .trim()
+  .max(2000)
+  .refine((value) => /^https?:\/\/[^\s]+$/i.test(value), {
+    message: 'La URL debe empezar por http:// o https://',
+  });
+
+export const webhookCreateSchema = z.object({
+  name: z.string().trim().min(1, 'El nombre es obligatorio').max(120),
+  url: webhookUrl,
+  events: z
+    .array(z.string().trim().min(1).max(60))
+    .min(1, 'Suscríbete al menos a un evento')
+    .max(20)
+    .refine((values) => values.every((value) => isWebhookPattern(value)), {
+      message: 'Hay un evento desconocido',
+    }),
+  active: z.boolean().default(true),
+});
+
+export const webhookUpdateSchema = webhookCreateSchema.partial().extend({
+  /** Issues a new secret and invalidates the one the receiver knows. */
+  rotateSecret: z.boolean().optional(),
+});
+
+// ---------------------------------------------------------------------------
 // Inferred input types
 // ---------------------------------------------------------------------------
 
@@ -343,5 +374,7 @@ export type RunUpdateInput = z.infer<typeof runUpdateSchema>;
 export type RunLogCreateInput = z.infer<typeof runLogCreateSchema>;
 export type ArtifactCreateInput = z.infer<typeof artifactCreateSchema>;
 export type CommentCreateInput = z.infer<typeof commentCreateSchema>;
+export type WebhookCreateInput = z.infer<typeof webhookCreateSchema>;
+export type WebhookUpdateInput = z.infer<typeof webhookUpdateSchema>;
 
 export { taskStatusSchema as taskStatus, taskPrioritySchema as taskPriority };

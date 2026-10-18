@@ -8,7 +8,7 @@ import {
 } from '@/lib/constants';
 import { db } from '@/lib/db/client';
 import { agents, delegations, tasks } from '@/lib/db/schema';
-import { publish } from '@/lib/realtime';
+import { emitEvent } from '@/lib/domain/events';
 import { serializeDelegation } from '@/lib/domain/serialize';
 import type { ActivityActor } from '@/lib/domain/activity';
 import type { DelegationDTO, QueueDTO } from '@/lib/types';
@@ -98,7 +98,7 @@ export async function createDelegation(
     .returning();
 
   const delegation = (await getDelegation(row.id))!;
-  publish('delegation.updated', { id: delegation.id, status: delegation.status });
+  emitEvent('delegation.updated', { id: delegation.id, status: delegation.status, delegation });
   return delegation;
 }
 
@@ -131,7 +131,12 @@ export async function updateDelegationStatus(
   if (!row) return null;
 
   const delegation = (await getDelegation(id))!;
-  publish('delegation.updated', { id, status: delegation.status, agentId: delegation.toAgentId });
+  emitEvent('delegation.updated', {
+    id,
+    status: delegation.status,
+    agentId: delegation.toAgentId,
+    delegation,
+  });
   return delegation;
 }
 

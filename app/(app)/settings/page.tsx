@@ -1,10 +1,12 @@
 import { Database, ShieldCheck, UserRound } from 'lucide-react';
 
+import { WebhooksSettings } from '@/components/webhooks/webhooks-settings';
 import { requireUser } from '@/lib/auth/session';
 import { PASSWORD_MIN_LENGTH } from '@/lib/constants';
 import { listProjects } from '@/lib/domain/projects';
 import { listLabels } from '@/lib/domain/labels';
 import { listTasks } from '@/lib/domain/tasks';
+import { listWebhooks } from '@/lib/domain/webhooks';
 import { getEnv } from '@/lib/env';
 
 export const dynamic = 'force-dynamic';
@@ -13,10 +15,11 @@ export default async function SettingsPage() {
   const user = await requireUser();
   const env = getEnv();
 
-  const [projects, labels, tasks] = await Promise.all([
+  const [projects, labels, tasks, webhooks] = await Promise.all([
     listProjects({ includeArchived: true }),
     listLabels(),
     listTasks({ limit: 5000 }),
+    listWebhooks(),
   ]);
 
   return (
@@ -45,6 +48,8 @@ export default async function SettingsPage() {
         </dl>
       </section>
 
+      <WebhooksSettings initialWebhooks={webhooks} />
+
       <section className="space-y-3">
         <h2 className="flex items-center gap-2 text-sm font-medium">
           <ShieldCheck className="size-4 text-muted-foreground" />
@@ -53,6 +58,7 @@ export default async function SettingsPage() {
         <dl className="divide-y divide-border rounded-lg border border-border text-sm">
           <Row label="URL base" value={env.APP_BASE_URL} mono />
           <Row label="Directorio de subidas" value={env.UPLOADS_DIR} mono />
+          <Row label="Especificación de la API" value="/api/openapi.json" mono />
           <Row label="Entorno" value={env.NODE_ENV} mono />
         </dl>
         <p className="text-xs text-muted-foreground">

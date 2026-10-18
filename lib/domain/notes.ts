@@ -8,7 +8,7 @@ import { serializeNote } from '@/lib/domain/serialize';
 import { markdownFileToNote, noteToMarkdownFile } from '@/lib/notes/frontmatter';
 import { markdownToPlainText } from '@/lib/notes/markdown';
 import { extractWikiLinks, normalizeTitle } from '@/lib/notes/wikilinks';
-import { publish } from '@/lib/realtime';
+import { emitEvent } from '@/lib/domain/events';
 import type { NoteDetailDTO, NoteListItemDTO, NoteRef } from '@/lib/types';
 import type { NoteCreateInput, NoteImportInput, NoteUpdateInput } from '@/lib/validation';
 
@@ -308,7 +308,7 @@ export async function createNote(input: NoteCreateInput): Promise<NoteDetailDTO>
   // pointing at with a dangling `[[link]]`.
   await rebuildAllLinks();
 
-  publish('note.changed', { id, action: 'created' });
+  emitEvent('note.changed', { id, action: 'created', title: input.title });
   return (await getNote(id))!;
 }
 
@@ -349,13 +349,22 @@ export async function updateNote(
     await rebuildLinks(id);
   }
 
-  publish('note.changed', { id, action: renamed ? 'renamed' : 'updated' });
+  // The body is not in the payload: a note can be 200 KB, and a receiver that
+  // wants it can ask for it — the title is what identifies a note in the vault.
+  emitEvent('note.changed', {
+    id,
+    action: renamed ? 'renamed' : 'updated',
+    title: patch.title ?? current.title,
+  });
   return getNote(id);
 }
 
 export async function deleteNote(id: string): Promise<boolean> {
-  const [row] = await db.delete(notes).where(eq(notes.id, id)).returning({ id: notes.id });
-  if (row) publish('note.changed', { id, action: 'deleted' });
+  const [row] = await db
+    .delete(notes)
+    .where(eq(notes.id, id))
+    .returning({ id: notes.id, title: notes.title });
+  if (row) emitEvent('note.changed', { id, action: 'deleted', title: row.title });
   return Boolean(row);
 }
 

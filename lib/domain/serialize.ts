@@ -10,6 +10,7 @@ import type {
   Run,
   RunLog,
   Task,
+  Webhook,
 } from '@/lib/db/schema';
 import type {
   ActivityDTO,
@@ -27,7 +28,9 @@ import type {
   RunDTO,
   RunLogDTO,
   TaskDTO,
+  WebhookDTO,
 } from '@/lib/types';
+import { webhookSecretPreview } from '@/lib/webhook';
 
 /** Normalises a timestamp column to an ISO string (or null). */
 function iso(value: Date | string | null | undefined): string | null {
@@ -262,5 +265,30 @@ export function serializeArtifact(artifact: Artifact): ArtifactDTO {
     content: artifact.kind === 'text' ? artifact.content : null,
     downloadUrl: artifact.kind === 'file' ? `/api/artifacts/${artifact.id}` : null,
     createdAt: iso(artifact.createdAt) ?? new Date(0).toISOString(),
+  };
+}
+
+/**
+ * The signing secret is summarised, never returned in full.
+ *
+ * It is the one credential that has to be stored in clear text (signing needs
+ * the original value), so the cheapest protection left is not shipping it to
+ * every page render: it is shown once, when it is created or rotated.
+ */
+export function serializeWebhook(webhook: Webhook): WebhookDTO {
+  return {
+    id: webhook.id,
+    name: webhook.name,
+    url: webhook.url,
+    events: webhook.events ?? [],
+    active: webhook.active,
+    secretPreview: webhookSecretPreview(webhook.secret),
+    lastDeliveryAt: iso(webhook.lastDeliveryAt),
+    lastStatus: webhook.lastStatus,
+    lastError: webhook.lastError,
+    deliveryCount: webhook.deliveryCount,
+    failureCount: webhook.failureCount,
+    createdAt: iso(webhook.createdAt) ?? new Date(0).toISOString(),
+    updatedAt: iso(webhook.updatedAt) ?? new Date(0).toISOString(),
   };
 }

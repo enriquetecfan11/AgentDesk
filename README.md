@@ -26,6 +26,7 @@ Todo corre en tu propia máquina. Sin servicios externos, sin cuentas, sin telem
 - [Atajos de teclado](#atajos-de-teclado)
 - [Notas](#notas)
 - [Agentes y API v1](#agentes-y-api-v1)
+- [Webhooks, OpenAPI y MCP](#webhooks-openapi-y-mcp)
 - [Pruebas](#pruebas)
 - [Desarrollo](#desarrollo)
 - [Base de datos y migraciones](#base-de-datos-y-migraciones)
@@ -42,7 +43,7 @@ Todo corre en tu propia máquina. Sin servicios externos, sin cuentas, sin telem
 | 3 | Inbox, Today, Upcoming, captura rápida, recurrencias, paleta de comandos | ✅ |
 | 4 | Notas con backlinks e import/export markdown | ✅ |
 | 5 | Agentes, tokens, API REST v1, delegaciones, runs, SSE | ✅ |
-| 6 | Webhooks, OpenAPI, servidor MCP | ⏳ |
+| 6 | Webhooks, OpenAPI, servidor MCP | ✅ |
 | 7 | Backup/restore y guía de migración Mac mini → Proxmox | ⏳ |
 | 8 | Tests, accesibilidad, rendimiento, README final | ⏳ |
 
@@ -64,6 +65,8 @@ Todo corre en tu propia máquina. Sin servicios externos, sin cuentas, sin telem
 │        │  · /api/v1/**  (token de agente)       │            │
 │        │  · /api/events (SSE)                   │            │
 │        │  · /api/v1/events (SSE de agentes)     │            │
+│        │  · webhooks salientes (HMAC-SHA256) ───┼──▶ n8n     │
+│        │  · /api/openapi.json                   │            │
 │        └────────────────┬───────────────────────┘            │
 │                         │  host: "db"                        │
 │                         ▼                                    │
@@ -85,6 +88,11 @@ Decisiones de diseño relevantes:
   (`db`); de cara al navegador se usa `APP_BASE_URL`.
 - **Los datos viven en volúmenes con nombre** (`pgdata`, `uploads`) para poder moverlos de
   una máquina a otra con un `.tar.gz`.
+- **Los avisos hacia fuera van firmados y no bloquean.** Un webhook es un POST con firma
+  HMAC-SHA256 y se lanza después de responder: si n8n está caído, guardar una tarea sigue
+  funcionando (y el fallo queda apuntado en el propio webhook).
+- **El contenedor llega a la máquina anfitriona en `host.docker.internal`.** Compose lo publica
+  como `host-gateway`, así que un webhook puede apuntar a algo que corras fuera de Docker.
 
 ---
 
@@ -218,7 +226,13 @@ SMOKE_EMAIL=tucorreo@example.com SMOKE_PASSWORD='tu-contraseña' ./scripts/smoke
 Comprueba autenticación, alta de proyecto, etiqueta y tarea, subtareas, cambios de estado,
 captura rápida, recurrencias, notas y enlaces, agentes con su token, la API `/api/v1` completa
 (tareas, comentarios, cola, delegaciones, runs, logs, artefactos y SSE), el aislamiento entre
-agentes y la revocación de tokens. No deja datos en la base de datos.
+agentes, la revocación de tokens y, con un receptor de verdad escuchando, la cadena entera de los
+webhooks: evento, cabeceras, firma HMAC, endpoint caído, prueba manual y rotación del secreto.
+También levanta el servidor MCP y le pide la cola. No deja datos en la base de datos.
+
+El receptor se abre en la máquina anfitriona y el contenedor llega a él por
+`host.docker.internal` (compose lo publica como `host-gateway`). Si el puerto 4599 está ocupado,
+`SMOKE_WEBHOOK_PORT=4699 ./scripts/smoke.sh`.
 
 ---
 
@@ -258,6 +272,10 @@ Los endpoints de la izquierda exigen **sesión de usuario** (cookie `ad_session`
 | `GET` | `/api/runs/:id` | Run con sus logs y artefactos |
 | `GET` | `/api/events` | Flujo SSE de la UI: tareas, runs y actividad en vivo |
 | `GET` | `/api/artifacts/:id` | Descargar un artefacto (sesión **o** token con `runs:read`) |
+| `GET` `POST` | `/api/webhooks` | Listar / crear salidas (`POST` devuelve el secreto una vez) |
+| `GET` `PATCH` `DELETE` | `/api/webhooks/:id` | Leer, editar (`rotateSecret`), borrar |
+| `POST` | `/api/webhooks/:id/test` | Entrega un evento `test` y devuelve la respuesta del receptor |
+| `GET` | `/api/openapi.json` | Especificación OpenAPI 3.1 de la API de agentes (pública) |
 
 Filtros de `GET /api/tasks`, todos opcionales:
 
@@ -680,6 +698,152 @@ run y delegación son siempre UUID: un id mal formado devuelve `404`, no un erro
 
 ---
 
+## Webhooks, OpenAPI y MCP
+
+### Webhooks salientes
+
+Son la vía por la que AgentDesk avisa a otra herramienta: n8n, un script propio, lo que sea. Se
+configuran en **Ajustes → Webhooks**.
+
+```bash
+BASE="http://192.168.1.50:3000"
+
+# Alta. El secreto de firma se devuelve una sola vez, como el de un token.
+curl -s -b cookies.txt -X POST "$BASE/api/webhooks" -H 'Content-Type: application/json' \
+  -d '{"name":"n8n","url":"http://192.168.1.50:5678/webhook/agentdesk","events":["task.*","delegation.updated"]}' | jq
+
+# Probar: entrega un evento `test` y espera la respuesta (200, 404, lo que sea).
+curl -s -b cookies.txt -X POST "$BASE/api/webhooks/<id>/test" | jq
+
+# Rotar el secreto: el receptor tendrá que actualizarlo.
+curl -s -b cookies.txt -X PATCH "$BASE/api/webhooks/<id>" \
+  -H 'Content-Type: application/json' -d '{"rotateSecret":true}' | jq
+```
+
+Eventos a los que se puede uno suscribir, con la misma nomenclatura que el flujo SSE:
+
+| Evento | Cuándo |
+|---|---|
+| `task.changed` | Una tarea se crea, se modifica o se borra |
+| `task.comment` | Una persona o un agente comenta |
+| `note.changed` | Una nota se crea, se edita, se renombra o se borra |
+| `delegation.updated` | Cambia el estado de una delegación |
+| `run.updated` | Un run se abre o se cierra |
+| `run.artifact` | Un run adjunta un artefacto |
+| `run.log` | Cada línea de log (muy hablador) |
+| `activity` | Cada acción de la cronología (se solapa con el resto) |
+
+Una suscripción es un nombre exacto, una familia (`task.*` cubre `task.changed` y
+`task.comment`) o `*`, que es todo.
+
+**El cuerpo** es siempre el mismo sobre:
+
+```json
+{
+  "event": "task.changed",
+  "at": "2026-01-31T09:12:44.512Z",
+  "delivery": "5f0c1a6e-…",
+  "webhookId": "a7b1…",
+  "data": { "id": "…", "action": "created", "task": { "id": "…", "title": "…" } }
+}
+```
+
+`data` es lo mismo que viaja por SSE, y es una **notificación**: en `task.changed`, `run.updated`,
+`delegation.updated` y `run.artifact` va también el objeto completo para que un receptor típico no
+tenga que pedir nada más, pero el cuerpo de una nota o de un artefacto de texto **no se inlina**
+(pueden ser cientos de kilobytes). Si el receptor necesita el detalle, lo pide a la API con su
+token.
+
+**La firma** es HMAC-SHA256, con el esquema de siempre (el mismo de Stripe), porque permite
+rechazar una repetición sin fiarse del reloj:
+
+```
+X-AgentDesk-Signature: t=1769841164,v1=6f3a…c21
+X-AgentDesk-Event: task.changed
+X-AgentDesk-Delivery: 5f0c1a6e-…
+```
+
+El contenido firmado es `"<t>.<cuerpo>"` en crudo —el timestamp entra en la firma, así que una
+petición capturada no se puede reenviar más tarde— y se compara en tiempo constante, con ±5
+minutos de tolerancia entre relojes. Verificarlo son ocho líneas:
+
+```js
+const expected = crypto
+  .createHmac('sha256', SECRETO)
+  .update(`${t}.${cuerpoCrudo}`)
+  .digest('hex');
+// y comparar con timingSafeEqual, no con ===
+```
+
+Hay un receptor de referencia que hace exactamente eso, y que sirve para probar la cadena entera
+sin montar n8n:
+
+```bash
+AGENTDESK_WEBHOOK_SECRET=whsec_… node scripts/webhook-receiver.mjs 4599 /tmp/agentdesk.jsonl
+# y en el alta del webhook:  http://host.docker.internal:4599/hook
+```
+
+Tres decisiones que conviene conocer:
+
+- **El secreto se guarda en claro.** No queda otra: firmar exige el valor original, y hashearlo
+  aquí no protegería nada porque el receptor tiene el mismo. Se enseña una vez al crearlo o al
+  rotarlo, y en la lista solo aparece su prefijo.
+- **La entrega es «fire and forget».** Un endpoint caído no puede hacer que falle la acción que
+  provocó el aviso: se lanza después de responder y su error se registra con `console.error`. En
+  la ficha del webhook sí queda el resultado de las últimas entregas (código HTTP, error, número
+  de fallos), que es lo que permite responder a «¿esto está llegando?».
+- **No hay reintentos ni cola.** Con una sola instancia local y un receptor en la misma red, un
+  reintento silencioso con sus consecuentes duplicados traería más problemas que soluciones. Si
+  el receptor es idempotente (n8n lo es por `delivery`), nada impide reintentar por su cuenta.
+
+### Especificación OpenAPI
+
+`GET /api/openapi.json` devuelve la descripción OpenAPI 3.1 de toda la API de agentes, con el
+`servers` tomado de `APP_BASE_URL`, así que sirve igual desde cualquier máquina de la LAN. Es
+pública a propósito: describe la forma de la API, no sus datos.
+
+```bash
+curl -s "$BASE/api/openapi.json" | jq '.paths | keys'
+# pégalo en Postman, Insomnia, Bruno o en un generador de clientes
+```
+
+### Servidor MCP
+
+`mcp/agentdesk-mcp.mjs` expone la API como **herramientas MCP**, para que un agente con acceso a
+esa interfaz trabaje sobre AgentDesk sin escribir una línea de HTTP. No tiene dependencias: se
+copia el fichero donde corra el agente.
+
+```bash
+AGENTDESK_URL=http://192.168.1.50:3000 AGENTDESK_TOKEN=agt_… \
+  node mcp/agentdesk-mcp.mjs --list
+```
+
+En Claude Desktop (o cualquier cliente MCP), `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "agentdesk": {
+      "command": "node",
+      "args": ["/ruta/a/agentdesk-mcp.mjs"],
+      "env": {
+        "AGENTDESK_URL": "http://192.168.1.50:3000",
+        "AGENTDESK_TOKEN": "agt_…"
+      }
+    }
+  }
+}
+```
+
+Herramientas: `whoami`, `get_queue`, `list_tasks`, `get_task`, `create_task`, `update_task`,
+`comment_task`, `list_projects`, `list_notes`, `get_note`, `create_note`, `update_note`,
+`list_delegations`, `update_delegation`, `start_run`, `log_run`, `finish_run` y `add_artifact`.
+
+El token manda: si solo tiene `tasks:read`, las herramientas que escriben devuelven el `403` de la
+API y el modelo lo lee como texto. Un fallo de la API nunca rompe el protocolo MCP.
+
+---
+
 ## Pruebas
 
 ```bash
@@ -691,8 +855,9 @@ npm run typecheck     # tsc --noEmit, en modo estricto
 Las pruebas unitarias no tocan la base de datos: cubren lo que se puede equivocar sin
 infraestructura (parseo de fechas locales, filtros de la API, esquemas de validación, la captura
 en lenguaje natural, el motor de recurrencias, el parser de Markdown, el frontmatter, los
-wikilinks, el escritor de ZIP y las reglas de los tokens de agente: formato, cabecera `Bearer` e
-implicación de scopes).
+wikilinks, el escritor de ZIP, las reglas de los tokens de agente —formato, cabecera `Bearer` e
+implicación de scopes— y las de los webhooks: emparejamiento de suscripciones, firma HMAC y
+rechazo de un cuerpo manipulado, de un secreto equivocado o de una petición repetida).
 Todo lo que necesita Postgres se comprueba con `scripts/smoke.sh`, que ejercita la API de punta a
 punta contra la instalación en marcha.
 
@@ -801,6 +966,8 @@ app/                  Rutas de Next.js (App Router)
   api/delegations/    Delegaciones vistas desde el humano
   api/runs/           Runs vistos desde el humano
   api/artifacts/      Descarga de artefactos (sesión o token)
+  api/webhooks/       Salidas hacia fuera: CRUD y prueba manual
+  api/openapi.json/   Especificación OpenAPI 3.1 de la API de agentes
   api/events/         SSE para la UI
   api/v1/             API de agentes: Bearer, scopes, cola, runs, SSE
 components/
@@ -813,6 +980,7 @@ components/
   shell/              Sidebar, topbar, navegación móvil, tema, paleta, atajos y refresco SSE
   tasks/              Lista, tablero, secciones, calendario, panel de detalle, hook
   ui/                 Primitivas estilo shadcn/ui (Radix + Tailwind)
+  webhooks/           Sección de Ajustes: alta, eventos, prueba y rotación del secreto
 docker/
   entrypoint.sh       Aplica migraciones y arranca el servidor
 drizzle/              Migraciones SQL versionadas (se commitean)
@@ -826,8 +994,11 @@ lib/
     schema.ts         Esquema Drizzle — fuente de verdad del modelo
     client.ts         Pool de Postgres (perezoso)
   domain/             Reglas de negocio: proyectos, tareas, notas, agentes, delegaciones,
-                      runs, comentarios y actividad
+                      runs, comentarios, actividad, webhooks y bus de eventos
   realtime.ts         Bus de eventos en proceso para SSE
+  openapi.ts          Descripción OpenAPI, construida con APP_BASE_URL
+  webhook.ts          Catálogo de eventos y emparejamiento de suscripciones (puro, con tests)
+  webhook-signature.ts Firma y verificación HMAC-SHA256 (con tests)
   storage.ts          Artefactos en el volumen "uploads"
   constants.ts        Metadatos de estados y prioridades (seguro en cliente)
   clipboard.ts        Copiar al portapapeles, con alternativa para HTTP plano
@@ -837,11 +1008,14 @@ lib/
   types.ts            Contratos JSON entre servidor y cliente
   zip.ts              Escritor de ZIP mínimo, sin dependencias (puro, con tests)
   env.ts              Validación de variables de entorno con Zod
+mcp/
+  agentdesk-mcp.mjs   Servidor MCP sin dependencias (JSON-RPC por stdio)
 scripts/
   migrate.ts          Runner de migraciones (se empaqueta en la imagen)
   reset-password.ts   Cambio de contraseña sin SMTP (se empaqueta en la imagen)
   reset-password.sh   Envoltorio sobre el contenedor
   reset-db.ts         Reinicio destructivo para desarrollo
+  webhook-receiver.mjs Receptor de referencia que verifica la firma
   verify.sh           Comprobación de extremo a extremo
   smoke.sh            Prueba de humo de la API
 Dockerfile            Build multi-stage, multi-arquitectura

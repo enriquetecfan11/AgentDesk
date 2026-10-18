@@ -264,3 +264,31 @@ export type TaskCommentDTO = {
   body: string;
   createdAt: string;
 };
+
+/** Outgoing webhook. The raw `secret` is never part of this shape. */
+export type WebhookDTO = {
+  id: string;
+  name: string;
+  url: string;
+  /** Event names, `area.*` families or `*`. */
+  events: string[];
+  active: boolean;
+  secretPreview: string;
+  lastDeliveryAt: string | null;
+  lastStatus: number | null;
+  lastError: string | null;
+  deliveryCount: number;
+  failureCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** What a manual "Probar" click got back from the endpoint. */
+export type WebhookTestResultDTO = {
+  ok: boolean;
+  status: number | null;
+  durationMs: number;
+  error: string | null;
+  /** First part of the response body, to see what the receiver answered. */
+  body: string | null;
+};

@@ -4,7 +4,7 @@ import { desc, eq } from 'drizzle-orm';
 
 import { db } from '@/lib/db/client';
 import { activityLog } from '@/lib/db/schema';
-import { publish } from '@/lib/realtime';
+import { emitEvent } from '@/lib/domain/events';
 import { serializeActivity } from '@/lib/domain/serialize';
 import type { ActivityDTO } from '@/lib/types';
 
@@ -43,7 +43,7 @@ export async function logActivity(input: LogActivityInput): Promise<void> {
 
     // One event for the whole timeline: a client watching the stream only has
     // to know that something moved, and refetches what it is showing.
-    publish('activity', {
+    emitEvent('activity', {
       action: input.action,
       actorType: input.actor.type,
       entityType: input.entityType ?? null,

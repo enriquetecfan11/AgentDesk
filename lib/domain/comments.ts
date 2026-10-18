@@ -4,7 +4,7 @@ import { and, asc, eq } from 'drizzle-orm';
 
 import { db } from '@/lib/db/client';
 import { activityLog } from '@/lib/db/schema';
-import { publish } from '@/lib/realtime';
+import { emitEvent } from '@/lib/domain/events';
 import type { ActivityActor } from '@/lib/domain/activity';
 import type { TaskCommentDTO } from '@/lib/types';
 
@@ -65,6 +65,6 @@ export async function addTaskComment(
     .returning();
 
   const comment = serializeComment(row);
-  publish('task.comment', comment);
+  emitEvent('task.comment', comment);
   return comment;
 }

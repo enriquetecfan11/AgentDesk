@@ -43,6 +43,10 @@ services:
       UPLOADS_DIR: /app/uploads
     ports:
       - '${HOST_BIND:-0.0.0.0}:${APP_PORT:-3000}:3000'
+    extra_hosts:
+      # Para que un webhook pueda apuntar a algo que corre en la máquina anfitriona
+      # (n8n, un receptor de pruebas…). En Docker Desktop ya existe; en Linux, no.
+      - 'host.docker.internal:host-gateway'
     volumes:
       - uploads:/app/uploads
     healthcheck:

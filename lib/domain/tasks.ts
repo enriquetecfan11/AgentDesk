@@ -14,7 +14,7 @@ import {
 import { todayIso } from '@/lib/dates';
 import { serializeTask } from '@/lib/domain/serialize';
 import { firstOccurrence, nextOccurrence, parseRecurrence } from '@/lib/recurrence';
-import { publish } from '@/lib/realtime';
+import { emitEvent } from '@/lib/domain/events';
 import type { LabelRef, ProjectRef, TaskDTO } from '@/lib/types';
 import type { TaskCreateInput, TaskUpdateInput } from '@/lib/validation';
 
@@ -246,8 +246,13 @@ export async function createTask(input: TaskCreateInput): Promise<TaskDTO> {
     await setTaskLabels(row.id, input.labelIds);
   }
 
-  publish('task.changed', { id: row.id, action: 'created' });
-  return (await getTask(row.id))!;
+  const task = (await getTask(row.id))!;
+
+  // The payload carries the task itself: a webhook that has to call back for
+  // every notification is only half a webhook. `action` stays stable so a
+  // receiver can switch on it.
+  emitEvent('task.changed', { id: task.id, action: 'created', task });
+  return task;
 }
 
 export type TaskUpdateResult = {
@@ -306,13 +311,14 @@ export async function updateTask(
   const [row] = await db.update(tasks).set(patch).where(eq(tasks.id, id)).returning();
   if (!row) return null;
 
-  publish('task.changed', { id, action: 'updated' });
-  return { task: (await getTask(id))!, recurrenceAdvanced };
+  const task = (await getTask(id))!;
+  emitEvent('task.changed', { id, action: 'updated', task });
+  return { task, recurrenceAdvanced };
 }
 
 export async function deleteTask(id: string): Promise<boolean> {
   const rows = await db.delete(tasks).where(eq(tasks.id, id)).returning({ id: tasks.id });
-  if (rows.length > 0) publish('task.changed', { id, action: 'deleted' });
+  if (rows.length > 0) emitEvent('task.changed', { id, action: 'deleted' });
   return rows.length > 0;
 }
 

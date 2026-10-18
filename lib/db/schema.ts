@@ -433,11 +433,19 @@ export const webhooks = pgTable('webhooks', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
   url: text('url').notNull(),
-  // Subscribed event names, e.g. ["task.created", "run.finished"].
+  // Subscriptions: an event name, `area.*` or `*`.
   events: text('events').array().notNull().default([]),
-  // Shared secret for the HMAC-SHA256 signature header.
+  // Shared secret for the HMAC-SHA256 signature header. Stored in clear text:
+  // signing needs the original value and the receiver holds the same secret.
   secret: text('secret').notNull(),
   active: boolean('active').notNull().default(true),
+  // Result of the last delivery. Enough to answer "is this endpoint alive?"
+  // from the settings screen without keeping a delivery log table.
+  lastDeliveryAt: timestamp('last_delivery_at', { withTimezone: true }),
+  lastStatus: integer('last_status'),
+  lastError: text('last_error'),
+  deliveryCount: integer('delivery_count').notNull().default(0),
+  failureCount: integer('failure_count').notNull().default(0),
   createdAt,
   updatedAt,
 });

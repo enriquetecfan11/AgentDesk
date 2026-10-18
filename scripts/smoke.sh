@@ -26,7 +26,19 @@ fi
 EMAIL="${SMOKE_EMAIL:-smoke@agentdesk.local}"
 PASSWORD="${SMOKE_PASSWORD:-smoke-password-2026}"
 JAR="$(mktemp)"
-trap 'rm -f "$JAR"' EXIT
+WORK_DIR="$(mktemp -d)"
+RECEIVER_PID=""
+
+# El receptor de webhooks se lanza en segundo plano: se limpia pase lo que pase.
+cleanup() {
+  if [ -n "$RECEIVER_PID" ]; then
+    kill "$RECEIVER_PID" 2>/dev/null || true
+    wait "$RECEIVER_PID" 2>/dev/null || true
+  fi
+  rm -rf "$WORK_DIR"
+  rm -f "$JAR"
+}
+trap cleanup EXIT
 
 PASS=0
 FAIL=0
@@ -513,7 +525,145 @@ curl -fsS -b "$JAR" -X DELETE "$BASE/api/tokens/$TOKEN_ID" > /dev/null
   && ok "un token revocado deja de autenticar" || bad "el token revocado sigue valiendo"
 
 # ---------------------------------------------------------------------------
-step "11. Limpieza"
+step "11. Webhooks firmados, OpenAPI y servidor MCP"
+# ---------------------------------------------------------------------------
+
+# El receptor de referencia escucha en la máquina anfitriona; el contenedor
+# llega hasta ella por host.docker.internal (compose lo publica como
+# host-gateway).
+WEBHOOK_PORT="${SMOKE_WEBHOOK_PORT:-4599}"
+WEBHOOK_ENDPOINT="http://host.docker.internal:$WEBHOOK_PORT/hook"
+
+created_body="$(printf '{"name":"humo","url":"%s","events":["task.changed"]}' "$WEBHOOK_ENDPOINT")"
+created="$(curl -fsS -b "$JAR" -X POST "$BASE/api/webhooks" -H 'Content-Type: application/json' \
+  -d "$created_body")"
+WEBHOOK_ID="$(printf '%s' "$created" | jget webhook.id)"
+WEBHOOK_SECRET="$(printf '%s' "$created" | jget secret)"
+
+[ -n "$WEBHOOK_ID" ] && ok "webhook creado" || bad "no se pudo crear el webhook"
+printf '%s' "$WEBHOOK_SECRET" | grep -q '^whsec_' \
+  && ok "el secreto se emite una vez y lleva el prefijo whsec_" \
+  || bad "el secreto no tiene la forma esperada"
+[ "$(printf '%s' "$created" | jget webhook.secret)" = "" ] \
+  && ok "el objeto del webhook no lleva el secreto en claro" \
+  || bad "el secreto viaja dentro del objeto del webhook"
+
+[ "$(status -b "$JAR" -X POST "$BASE/api/webhooks" -H 'Content-Type: application/json' \
+  -d '{"name":"malo","url":"ftp://10.0.0.1/hook","events":["task.changed"]}')" = "422" ] \
+  && ok "una URL que no es http(s) → 422" || bad "no se valida el esquema de la URL"
+
+# El cuerpo se arma aparte: bash 3.2 se lía con comillas escapadas dentro de $()
+# metido en un test [ ]. Aquí el JSON solo interpola una variable.
+unknown_event_body="$(printf '{"name":"malo","url":"%s","events":["inventado"]}' "$WEBHOOK_ENDPOINT")"
+[ "$(status -b "$JAR" -X POST "$BASE/api/webhooks" -H 'Content-Type: application/json' \
+  -d "$unknown_event_body")" = "422" ] \
+  && ok "un evento desconocido → 422" || bad "no se validan los eventos suscritos"
+
+# Receptor de referencia con el secreto recién emitido: verifica la firma.
+AGENTDESK_WEBHOOK_SECRET="$WEBHOOK_SECRET" \
+  node scripts/webhook-receiver.mjs "$WEBHOOK_PORT" "$WORK_DIR/webhooks.jsonl" \
+  2> "$WORK_DIR/receiver.log" &
+RECEIVER_PID=$!
+sleep 1
+
+# Un evento real: crear una tarea publica task.changed, que se entrega.
+WH_TASK_ID="$(curl -fsS -b "$JAR" -X POST "$BASE/api/tasks" -H 'Content-Type: application/json' \
+  -d '{"title":"Dispara el webhook"}' | jget task.id)"
+
+for _ in $(seq 1 20); do
+  [ -s "$WORK_DIR/webhooks.jsonl" ] && break
+  sleep 0.5
+done
+
+if [ -s "$WORK_DIR/webhooks.jsonl" ]; then
+  ok "crear una tarea entrega task.changed al receptor"
+  grep -q '"signatureValid":true' "$WORK_DIR/webhooks.jsonl" \
+    && ok "la firma HMAC-SHA256 verifica en el receptor" || bad "la firma no verifica"
+  grep -q '"event":"task.changed"' "$WORK_DIR/webhooks.jsonl" \
+    && ok "la cabecera X-AgentDesk-Event nombra el evento" || bad "falta la cabecera del evento"
+  grep -q '"action":"created"' "$WORK_DIR/webhooks.jsonl" \
+    && ok "el cuerpo lleva la tarea creada, no solo su id" || bad "el cuerpo no lleva la tarea"
+else
+  bad "el webhook no llegó al receptor"
+fi
+
+# Un endpoint caído no puede tumbar la petición que lo provoca.
+dead="$(curl -fsS -b "$JAR" -X POST "$BASE/api/webhooks" -H 'Content-Type: application/json' \
+  -d '{"name":"zumbado","url":"http://127.0.0.1:45999/nada","events":["task.changed"]}')"
+DEAD_ID="$(printf '%s' "$dead" | jget webhook.id)"
+
+dead_task="$(curl -fsS -b "$JAR" -X POST "$BASE/api/tasks" -H 'Content-Type: application/json' \
+  -d '{"title":"Con un webhook caído"}')"
+DEAD_TASK_ID="$(printf '%s' "$dead_task" | jget task.id)"
+[ -n "$DEAD_TASK_ID" ] \
+  && ok "un webhook caído no impide crear la tarea" || bad "el webhook caído rompió la petición"
+
+sleep 1
+failures="$(curl -fsS -b "$JAR" "$BASE/api/webhooks" | python3 -c "
+import json, sys
+target = '$DEAD_ID'
+print(next((w['failureCount'] for w in json.load(sys.stdin)['webhooks'] if w['id'] == target), 0))
+")"
+[ "$failures" -ge 1 ] \
+  && ok "el fallo de entrega queda registrado en el webhook" || bad "el fallo no se registró"
+
+# Probar a mano: es la única entrega cuya respuesta se espera.
+test_run="$(curl -fsS -b "$JAR" -X POST "$BASE/api/webhooks/$WEBHOOK_ID/test")"
+[ "$(printf '%s' "$test_run" | jget result.ok)" = "True" ] \
+  && ok "POST /api/webhooks/:id/test entrega y trae la respuesta" || bad "la prueba manual falló"
+
+# Rotar el secreto invalida el anterior: el receptor sigue con el viejo.
+curl -fsS -b "$JAR" -X PATCH "$BASE/api/webhooks/$WEBHOOK_ID" \
+  -H 'Content-Type: application/json' -d '{"rotateSecret":true}' > /dev/null
+
+rotated_task="$(curl -fsS -b "$JAR" -X POST "$BASE/api/tasks" -H 'Content-Type: application/json' \
+  -d '{"title":"Tras rotar el secreto"}')"
+ROTATED_TASK_ID="$(printf '%s' "$rotated_task" | jget task.id)"
+
+for _ in $(seq 1 20); do
+  grep -q '"event":"task.changed"' "$WORK_DIR/webhooks.jsonl" \
+    && [ "$(grep -c '"signatureValid":false' "$WORK_DIR/webhooks.jsonl")" -ge 1 ] && break
+  sleep 0.5
+done
+
+grep -q '"signatureValid":false' "$WORK_DIR/webhooks.jsonl" \
+  && ok "tras rotar, el secreto viejo ya no firma" || bad "el secreto rotado sigue valiendo"
+
+kill "$RECEIVER_PID" 2>/dev/null || true
+wait "$RECEIVER_PID" 2>/dev/null || true
+RECEIVER_PID=""
+
+# La especificación de la API es pública y describe los endpoints de agentes.
+spec="$(curl -fsS "$BASE/api/openapi.json")"
+[ "$(printf '%s' "$spec" | jget openapi)" = "3.1.0" ] \
+  && ok "/api/openapi.json sirve la especificación" || bad "no se pudo leer la especificación"
+printf '%s' "$spec" | grep -q '"/api/v1/queue"' \
+  && ok "la especificación incluye la cola" || bad "falta /api/v1/queue en la especificación"
+printf '%s' "$spec" | grep -q "$BASE" \
+  && ok "los servers apuntan a APP_BASE_URL" || bad "el server de la especificación no cuadra"
+
+# Servidor MCP: un token nuevo para que pueda pedir la cola.
+mcp_token="$(curl -fsS -b "$JAR" -X POST "$BASE/api/agents/$AGENT_ID/tokens" \
+  -H 'Content-Type: application/json' -d '{"name":"mcp","scopes":["delegations:read"]}' | jget secret)"
+
+node mcp/agentdesk-mcp.mjs --list | grep -q '^get_queue' \
+  && ok "el servidor MCP lista sus herramientas" || bad "el servidor MCP no lista nada"
+
+mcp_out="$(printf '%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_queue","arguments":{}}}' \
+  | AGENTDESK_URL="$BASE" AGENTDESK_TOKEN="$mcp_token" node mcp/agentdesk-mcp.mjs 2>/dev/null || true)"
+
+printf '%s' "$mcp_out" | grep -q '"name":"agentdesk"' \
+  && ok "el servidor MCP responde a initialize" || bad "el servidor MCP no saludó"
+# El contenido de la herramienta viaja como texto JSON, con las comillas
+# escapadas: se busca la palabra, no el literal entrecomillado.
+printf '%s' "$mcp_out" | grep -q 'delegations' \
+  && ok "el servidor MCP ejecuta get_queue contra la API" || bad "la herramienta MCP no llamó a la API"
+
+# ---------------------------------------------------------------------------
+step "12. Limpieza"
 # ---------------------------------------------------------------------------
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$SUBTASK_ID" > /dev/null && ok "subtarea eliminada"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$TASK_ID" > /dev/null && ok "tarea eliminada"
@@ -530,6 +680,15 @@ curl -fsS -b "$JAR" -X DELETE "$BASE/api/notes/$IMPORTED_ID" > /dev/null && ok "
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$AGENT_TASK_ID" > /dev/null && ok "tarea del agente eliminada"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/agents/$AGENT_ID" > /dev/null && ok "agente eliminado (con sus runs y delegaciones)"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/agents/$OTHER_AGENT_ID" > /dev/null && ok "agente vecino eliminado"
+
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/webhooks/$WEBHOOK_ID" > /dev/null && ok "webhook eliminado"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/webhooks/$DEAD_ID" > /dev/null && ok "webhook caído eliminado"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$WH_TASK_ID" > /dev/null && ok "tarea del webhook eliminada"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$DEAD_TASK_ID" > /dev/null && ok "tarea del webhook caído eliminada"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$ROTATED_TASK_ID" > /dev/null && ok "tarea posterior a la rotación eliminada"
+
+[ "$(curl -fsS -b "$JAR" "$BASE/api/webhooks" | jget webhooks.0.id)" = "" ] \
+  && ok "no queda ningún webhook" || bad "quedan webhooks en la base de datos"
 
 # ---------------------------------------------------------------------------
 printf '\n\033[1mResultado:\033[0m %d correctas, %d fallidas\n' "$PASS" "$FAIL"

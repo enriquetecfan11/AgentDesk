@@ -13,7 +13,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "db:reset": "tsx scripts/reset-db.ts"
+    "db:reset": "tsx scripts/reset-db.ts",
+    "mcp": "node mcp/agentdesk-mcp.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.2",
