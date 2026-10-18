@@ -23,35 +23,87 @@ Tools (mapped to agent-api style operations):
 - add_artifact          -> attach a result artifact to a run/task
 - add_note              -> attach a work note to a task
 - propose_task          -> create a new task in Inbox (origin=agent)
-- search_tasks          -> search tasks by title substring
+- search_tasks          -> search this agent's delegated tasks by title substring
 
 Permission checks are identical to agent-api (agents.permissions jsonb).
 Every tools/call writes a timeline event attributed to the agent.
 
-CORS: mandatory headers on every response including OPTIONS preflight.
+Authentication: required on every request, including initialize, tools/list and
+ping. The catalog of tools is not something an unauthenticated caller should be
+able to enumerate, and MCP clients send the Authorization header throughout.
+
+Input validation: `inputSchema` below is not merely documentation. Each tool
+declares a validate() that runs before executeTool(), so a client that ignores
+the advertised schema still cannot send wrong types, oversized strings or
+unexpected keys. `additionalProperties: false` is enforced, not assumed.
+
+Ownership rules: a task is visible to an agent only if it appears in one of that
+agent's delegations. search_tasks is scoped the same way as read_task.
+
+No CORS headers: MCP clients are local processes authenticating with a bearer
+token, which is not a browser credential, so no cross-origin surface is needed.
 */
 
-import { createClient } from 'npm:@supabase/supabase-js@2.58.0';
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Client-Info, Apikey',
-};
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.58.0';
 
 const PROTOCOL_VERSION = '2025-03-26';
+
+const MAX_TITLE = 300;
+const MAX_TEXT = 20000;
+const MAX_QUERY = 200;
+const MAX_URL = 2048;
+const MAX_ID = 64;
+
+class ValidationError extends Error {}
+
+/** Rejects any key not listed, so an agent cannot smuggle extra columns through. */
+function shape(args: Record<string, unknown>, allowed: string[]): void {
+  for (const key of Object.keys(args)) {
+    if (!allowed.includes(key)) throw new ValidationError(`Unexpected argument: ${key}`);
+  }
+}
+
+function str(args: Record<string, unknown>, key: string, max: number): string | undefined {
+  if (args[key] === undefined || args[key] === null) return undefined;
+  if (typeof args[key] !== 'string') throw new ValidationError(`${key} must be a string`);
+  if ((args[key] as string).length > max) throw new ValidationError(`${key} exceeds ${max} characters`);
+  return args[key] as string;
+}
+
+function reqStr(args: Record<string, unknown>, key: string, max: number): string {
+  const value = str(args, key, max);
+  if (value === undefined || !value.trim()) {
+    throw new ValidationError(`${key} must be a non-empty string under ${max} characters`);
+  }
+  return value.trim();
+}
+
+function oneOf<T extends string>(args: Record<string, unknown>, key: string, allowed: readonly T[], fallback?: T): T | undefined {
+  if (args[key] === undefined || args[key] === null) return fallback;
+  if (!allowed.includes(args[key] as T)) throw new ValidationError(`${key} must be one of: ${allowed.join(', ')}`);
+  return args[key] as T;
+}
+
+function object(args: Record<string, unknown>, key: string, maxKeys: number): Record<string, unknown> {
+  const value = args[key];
+  if (value === undefined || value === null) return {};
+  if (typeof value !== 'object' || Array.isArray(value)) throw new ValidationError(`${key} must be an object`);
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > maxKeys) throw new ValidationError(`${key} has too many keys`);
+  return value as Record<string, unknown>;
+}
 
 function jsonrpc(id: unknown, result: unknown): Response {
   return new Response(JSON.stringify({ jsonrpc: '2.0', id, result }), {
     status: 200,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
   });
 }
 
 function jsonrpcError(id: unknown, code: number, message: string, status = 200): Response {
   return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }), {
     status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
   });
 }
 
@@ -70,7 +122,7 @@ interface AgentRow {
   actor_id: string | null;
 }
 
-async function authenticate(req: Request, admin: ReturnType<typeof createClient>): Promise<AgentRow | null> {
+async function authenticate(req: Request, admin: SupabaseClient): Promise<AgentRow | null> {
   const auth = req.headers.get('Authorization') ?? '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
   if (!token || !token.startsWith('agt_')) return null;
@@ -86,12 +138,27 @@ async function authenticate(req: Request, admin: ReturnType<typeof createClient>
 
 // ============ Tool definitions ============
 
-const TOOLS = [
+interface ToolDef {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  permission: string;
+  /** Returns normalised arguments; throws ValidationError on anything malformed. */
+  validate: (args: Record<string, unknown>) => Record<string, unknown>;
+}
+
+const NO_ARGS: ToolDef['validate'] = (args) => {
+  shape(args, []);
+  return {};
+};
+
+const TOOLS: ToolDef[] = [
   {
     name: 'list_delegations',
     description: 'Lista las delegaciones pendientes o en curso asignadas a este agente, con su tarea y contexto adjunto.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     permission: 'read_delegations',
+    validate: NO_ARGS,
   },
   {
     name: 'read_task',
@@ -103,10 +170,14 @@ const TOOLS = [
       additionalProperties: false,
     },
     permission: 'read_tasks',
+    validate: (args) => {
+      shape(args, ['task_id']);
+      return { task_id: reqStr(args, 'task_id', MAX_ID) };
+    },
   },
   {
     name: 'search_tasks',
-    description: 'Busca tareas por substring en el título (solo lectura, no requiere pertenencia).',
+    description: 'Busca tareas por substring en el título, entre las tareas delegadas a este agente.',
     inputSchema: {
       type: 'object',
       properties: { query: { type: 'string', description: 'Texto a buscar en el título' } },
@@ -114,6 +185,10 @@ const TOOLS = [
       additionalProperties: false,
     },
     permission: 'read_tasks',
+    validate: (args) => {
+      shape(args, ['query']);
+      return { query: reqStr(args, 'query', MAX_QUERY) };
+    },
   },
   {
     name: 'start_run',
@@ -128,6 +203,10 @@ const TOOLS = [
       additionalProperties: false,
     },
     permission: 'write_runs',
+    validate: (args) => {
+      shape(args, ['delegation_id', 'input']);
+      return { delegation_id: reqStr(args, 'delegation_id', MAX_ID), input: object(args, 'input', 100) };
+    },
   },
   {
     name: 'update_run',
@@ -144,6 +223,15 @@ const TOOLS = [
       additionalProperties: false,
     },
     permission: 'write_runs',
+    validate: (args) => {
+      shape(args, ['run_id', 'status', 'summary', 'error']);
+      return {
+        run_id: reqStr(args, 'run_id', MAX_ID),
+        status: reqStr(args, 'status', 20),
+        summary: str(args, 'summary', MAX_TEXT),
+        error: str(args, 'error', MAX_TEXT),
+      };
+    },
   },
   {
     name: 'add_artifact',
@@ -162,6 +250,17 @@ const TOOLS = [
       additionalProperties: false,
     },
     permission: 'write_artifacts',
+    validate: (args) => {
+      shape(args, ['run_id', 'task_id', 'kind', 'title', 'content_text', 'url']);
+      return {
+        title: reqStr(args, 'title', MAX_TITLE),
+        kind: oneOf(args, 'kind', ['text', 'code', 'url', 'file'] as const, 'text'),
+        run_id: str(args, 'run_id', MAX_ID),
+        task_id: str(args, 'task_id', MAX_ID),
+        content_text: str(args, 'content_text', MAX_TEXT),
+        url: str(args, 'url', MAX_URL),
+      };
+    },
   },
   {
     name: 'add_note',
@@ -176,7 +275,16 @@ const TOOLS = [
       required: ['task_id', 'title'],
       additionalProperties: false,
     },
-    permission: 'read_tasks',
+    // Was 'read_tasks', which meant a read permission gated a write.
+    permission: 'write_notes',
+    validate: (args) => {
+      shape(args, ['task_id', 'title', 'body_md']);
+      return {
+        task_id: reqStr(args, 'task_id', MAX_ID),
+        title: reqStr(args, 'title', MAX_TITLE),
+        body_md: str(args, 'body_md', MAX_TEXT),
+      };
+    },
   },
   {
     name: 'propose_task',
@@ -193,18 +301,26 @@ const TOOLS = [
       additionalProperties: false,
     },
     permission: 'propose_task',
+    validate: (args) => {
+      shape(args, ['title', 'description', 'priority', 'due_date']);
+      return {
+        title: reqStr(args, 'title', MAX_TITLE),
+        description: str(args, 'description', MAX_TEXT),
+        priority: oneOf(args, 'priority', ['urgent', 'high', 'normal', 'low'] as const, 'normal'),
+        due_date: str(args, 'due_date', 10),
+      };
+    },
   },
 ];
 
 // ============ Tool execution ============
 
 async function executeTool(
-  admin: ReturnType<typeof createClient>,
+  admin: SupabaseClient,
   agent: AgentRow,
   name: string,
   args: Record<string, unknown>,
 ): Promise<{ ok: boolean; data?: unknown; error?: string }> {
-  const has = (p: string) => (agent.permissions as string[]).includes(p);
   const logEvent = async (kind: string, entityType: string, entityId: string | null, entityTitle: string | null, payload: Record<string, unknown> = {}) => {
     await admin.from('events').insert({
       kind, actor_id: agent.actor_id, entity_type: entityType, entity_id: entityId, entity_title: entityTitle, payload,
@@ -238,10 +354,20 @@ async function executeTool(
     }
 
     case 'search_tasks': {
-      const query = args.query as string;
+      // Scoped to this agent's delegated tasks, matching read_task. It used to
+      // return every non-done task in the workspace.
+      const query = (args.query as string).replace(/[%_]/g, (c) => `\\${c}`);
+      const { data: links, error: linkError } = await admin
+        .from('delegations')
+        .select('task_id')
+        .eq('agent_id', agent.id);
+      if (linkError) return { ok: false, error: linkError.message };
+      const taskIds = (links ?? []).map((l) => (l as { task_id: string }).task_id);
+      if (taskIds.length === 0) return { ok: true, data: { tasks: [] } };
       const { data, error } = await admin
         .from('tasks')
         .select('id, title, status, priority, due_date, project_id, origin')
+        .in('id', taskIds)
         .ilike('title', `%${query}%`)
         .neq('status', 'done')
         .limit(20);
@@ -298,7 +424,7 @@ async function executeTool(
       const title = args.title as string;
       const patch: Record<string, unknown> = {
         agent_id: agent.id,
-        kind: (['text', 'code', 'url', 'file'].includes(args.kind as string) ? args.kind : 'text') as string,
+        kind: (args.kind as string) ?? 'text',
         title,
         content_text: (args.content_text as string) ?? null,
         url: (args.url as string) ?? null,
@@ -318,6 +444,7 @@ async function executeTool(
           .maybeSingle();
         if (!link) return { ok: false, error: 'task_id is not part of this agent delegations' };
       }
+      if (!patch.run_id && !patch.task_id) return { ok: false, error: 'add_artifact requires run_id or task_id' };
       const { data: artifact, error } = await admin.from('artifacts').insert(patch).select('*').single();
       if (error) return { ok: false, error: error.message };
       await logEvent('artifact.created', 'artifact', (artifact as { id: string }).id, title, { via: 'mcp' });
@@ -351,7 +478,7 @@ async function executeTool(
         .insert({
           title,
           description: (args.description as string) ?? null,
-          priority: (['urgent', 'high', 'normal', 'low'].includes(args.priority as string) ? args.priority : 'normal') as string,
+          priority: (args.priority as string) ?? 'normal',
           due_date: (args.due_date as string) ?? null,
           origin: 'agent',
           status: 'backlog',
@@ -369,10 +496,6 @@ async function executeTool(
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { status: 200, headers: corsHeaders });
-  }
-
   if (req.method === 'GET') {
     return jsonrpcError(null, -32601, 'GET not supported; use POST with JSON-RPC 2.0', 405);
   }
@@ -388,25 +511,29 @@ Deno.serve(async (req: Request) => {
   );
 
   try {
-    let body: {
-      jsonrpc?: string;
-      id?: unknown;
-      method?: string;
-      params?: Record<string, unknown>;
-    };
+    let body: unknown;
     try {
       body = await req.json();
     } catch {
       return jsonrpcError(null, -32700, 'Parse error', 400);
     }
 
-    // Batch: process each message, collect responses (no response for notifications)
-    const messages = Array.isArray(body) ? body : [body];
+    // Every request is authenticated, including initialize, tools/list and ping.
+    const agent = await authenticate(req, admin);
+    if (!agent) {
+      return jsonrpcError(null, -32001, 'Unauthorized: invalid or inactive agent token', 401);
+    }
+
+    const messages = Array.isArray(body) ? (body as Record<string, unknown>[]) : [body as Record<string, unknown>];
     const responses: unknown[] = [];
 
     for (const msg of messages) {
+      if (!msg || typeof msg !== 'object') {
+        responses.push({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });
+        continue;
+      }
       const id = msg.id ?? null;
-      const method = msg.method ?? '';
+      const method = typeof msg.method === 'string' ? msg.method : '';
 
       if (method === 'initialize') {
         responses.push({
@@ -446,17 +573,8 @@ Deno.serve(async (req: Request) => {
       }
 
       if (method === 'tools/call') {
-        const agent = await authenticate(req, admin);
-        if (!agent) {
-          responses.push({
-            jsonrpc: '2.0',
-            id,
-            error: { code: -32001, message: 'Unauthorized: invalid or inactive agent token' },
-          });
-          continue;
-        }
-        const params = msg.params ?? {};
-        const name = params.name as string;
+        const params = (msg.params ?? {}) as Record<string, unknown>;
+        const name = typeof params.name === 'string' ? params.name : '';
         const tool = TOOLS.find((t) => t.name === name);
         if (!tool) {
           responses.push({ jsonrpc: '2.0', id, error: { code: -32602, message: `Unknown tool: ${name}` } });
@@ -473,7 +591,33 @@ Deno.serve(async (req: Request) => {
           });
           continue;
         }
-        const args = (params.arguments as Record<string, unknown>) ?? {};
+
+        const raw = params.arguments ?? {};
+        if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+          responses.push({
+            jsonrpc: '2.0',
+            id,
+            result: { content: [{ type: 'text', text: 'Invalid arguments: must be an object' }], isError: true },
+          });
+          continue;
+        }
+
+        // The advertised inputSchema is enforced here, not merely documented.
+        let args: Record<string, unknown>;
+        try {
+          args = tool.validate(raw as Record<string, unknown>);
+        } catch (e) {
+          if (e instanceof ValidationError) {
+            responses.push({
+              jsonrpc: '2.0',
+              id,
+              result: { content: [{ type: 'text', text: `Invalid arguments: ${e.message}` }], isError: true },
+            });
+            continue;
+          }
+          throw e;
+        }
+
         const outcome = await executeTool(admin, agent, name, args);
         responses.push({
           jsonrpc: '2.0',
@@ -493,15 +637,15 @@ Deno.serve(async (req: Request) => {
     }
 
     if (responses.length === 0) {
-      return new Response(null, { status: 202, headers: corsHeaders });
+      return new Response(null, { status: 202 });
     }
 
     return new Response(
       JSON.stringify(Array.isArray(body) ? responses : responses[0]),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
     );
   } catch (e) {
     console.error('mcp-gateway error', e);
-    return jsonrpcError(null, -32603, e instanceof Error ? e.message : 'Internal error', 500);
+    return jsonrpcError(null, -32603, 'Internal error', 500);
   }
 });
