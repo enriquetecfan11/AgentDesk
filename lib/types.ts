@@ -30,7 +30,6 @@ export interface Agent {
   tool: string | null;
   capabilities: string[];
   permissions: string[];
-  token_hash: string | null;
   token_prefix: string | null;
   status: AgentStatus;
   actor_id: string | null;
@@ -161,7 +160,6 @@ export interface Automation {
   description: string | null;
   permissions: string[];
   output_webhook_url: string | null;
-  secret_hash: string | null;
   secret_prefix: string | null;
   status: AgentStatus;
   actor_id: string | null;

@@ -1,12 +1,28 @@
-import {
-  createAgentWithActor, createAutomationWithSecret, deleteAgentWithActor, updateAgentConfig,
-} from '@/lib/agents-server';
 import { supabase } from './supabase';
 import type {
   Actor, Agent, AgentKind, AgentWithActor, Artifact, Automation, Delegation, DelegationWithContext,
   Decision, Note, Project, Run, Task, TaskWithRefs, WorkspaceEvent,
   TaskStatus, TaskPriority, DelegationStatus, RunStatus,
 } from './types';
+
+// `agents.token_hash` and `automations.secret_hash` are not selectable by the
+// anon role (migration 20261018120000), so every query against those two tables
+// names its columns explicitly instead of using '*'. Keep it that way.
+const AGENT_COLUMNS = 'id, name, description, kind, tool, capabilities, permissions, token_prefix, status, actor_id, created_at, updated_at';
+const AUTOMATION_COLUMNS = 'id, name, description, permissions, output_webhook_url, secret_prefix, status, actor_id, created_at, updated_at';
+
+/** Calls a privileged route handler and surfaces its error message. */
+async function apiRequest<T>(url: string, init: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.error ?? `Request failed with status ${res.status}`);
+  }
+  return (await res.json()) as T;
+}
 
 // ============ Actors ============
 
@@ -23,7 +39,7 @@ export async function getHumanActor(): Promise<Actor | null> {
 export async function listAgents(): Promise<AgentWithActor[]> {
   const { data, error } = await supabase
     .from('agents')
-    .select('*, actor:actors(*)')
+    .select(`${AGENT_COLUMNS}, actor:actors(*)`)
     .order('created_at');
   if (error) throw error;
   return (data ?? []) as unknown as AgentWithActor[];
@@ -32,10 +48,14 @@ export async function listAgents(): Promise<AgentWithActor[]> {
 export async function createAgent(input: {
   name: string; description: string | null; kind: AgentKind;
 }): Promise<{ agent: AgentWithActor; token: string }> {
-  const { agentId, token } = await createAgentWithActor(input);
+  // The token is minted server-side and returned exactly once.
+  const { agentId, token } = await apiRequest<{ agentId: string; token: string }>('/api/agents', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
   const { data, error } = await supabase
     .from('agents')
-    .select('*, actor:actors(*)')
+    .select(`${AGENT_COLUMNS}, actor:actors(*)`)
     .eq('id', agentId)
     .maybeSingle();
   if (error) throw error;
@@ -43,13 +63,14 @@ export async function createAgent(input: {
 }
 
 export async function deleteAgent(agentId: string, actorId: string | null): Promise<void> {
-  await deleteAgentWithActor(agentId, actorId);
+  void actorId; // resolved server-side; kept for call-site compatibility
+  await apiRequest(`/api/agents/${agentId}`, { method: 'DELETE' });
 }
 
 export async function updateAgent(agentId: string, patch: {
   status?: 'active' | 'paused'; name?: string; description?: string | null;
 }): Promise<void> {
-  await updateAgentConfig(agentId, patch);
+  await apiRequest(`/api/agents/${agentId}`, { method: 'PATCH', body: JSON.stringify(patch) });
 }
 
 // ============ Projects ============
@@ -338,7 +359,7 @@ export async function createDecision(input: {
 // ============ Automations ============
 
 export async function listAutomations(): Promise<Automation[]> {
-  const { data, error } = await supabase.from('automations').select('*').order('created_at');
+  const { data, error } = await supabase.from('automations').select(AUTOMATION_COLUMNS).order('created_at');
   if (error) throw error;
   return (data ?? []) as Automation[];
 }
@@ -346,12 +367,14 @@ export async function listAutomations(): Promise<Automation[]> {
 export async function createAutomation(input: {
   name: string; description?: string | null; permissions?: string[];
 }): Promise<{ automation: Automation; secret: string }> {
-  const { automationId, secret } = await createAutomationWithSecret({
-    name: input.name, description: input.description ?? null, permissions: input.permissions,
-  });
+  // The secret is minted server-side and returned exactly once.
+  const { automationId, secret } = await apiRequest<{ automationId: string; secret: string }>(
+    '/api/automations',
+    { method: 'POST', body: JSON.stringify(input) },
+  );
   const { data, error } = await supabase
     .from('automations')
-    .select('*')
+    .select(AUTOMATION_COLUMNS)
     .eq('id', automationId)
     .maybeSingle();
   if (error) throw error;
@@ -359,13 +382,11 @@ export async function createAutomation(input: {
 }
 
 export async function updateAutomation(id: string, patch: Partial<Automation>): Promise<void> {
-  const { error } = await supabase.from('automations').update(patch).eq('id', id);
-  if (error) throw error;
+  await apiRequest(`/api/automations/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
 }
 
 export async function deleteAutomation(id: string): Promise<void> {
-  const { error } = await supabase.from('automations').delete().eq('id', id);
-  if (error) throw error;
+  await apiRequest(`/api/automations/${id}`, { method: 'DELETE' });
 }
 
 export async function listAutomationLog(filter?: { automationId?: string }): Promise<{
