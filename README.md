@@ -32,7 +32,7 @@ Todo corre en tu propia máquina. Sin servicios externos, sin cuentas, sin telem
 | Fase | Contenido | Estado |
 |---|---|---|
 | 1 | Esqueleto: repo, Dockerfile multi-arch, compose, Postgres, migraciones, healthchecks | ✅ |
-| 2 | Auth + layout + proyectos + tareas (lista y Kanban) | ⏳ |
+| 2 | Auth + layout + proyectos + tareas (lista y Kanban) | ✅ |
 | 3 | Inbox, Today, Upcoming, captura rápida, recurrencias, paleta de comandos | ⏳ |
 | 4 | Notas con backlinks e import/export markdown | ⏳ |
 | 5 | Agentes, tokens, API REST v1, delegaciones, runs, SSE | ⏳ |
@@ -150,11 +150,30 @@ La aplicación arranca **sin usuarios**. La primera vez que entres:
 
 1. Abre `APP_BASE_URL` en el navegador.
 2. Serás redirigido a `/setup`.
-3. Elige email y contraseña. La contraseña debe tener **al menos 12 caracteres**.
+3. Elige nombre, email y contraseña. La contraseña debe tener **al menos 12 caracteres**.
 4. Al crearse el primer usuario, `/setup` queda deshabilitado para siempre (devuelve `409`).
 
-> Esta pantalla se implementa en la **Fase 2**. Hasta entonces, la raíz muestra una página de
-> estado con la URL base y la conectividad con la base de datos.
+Después, `/login` es la puerta de entrada habitual.
+
+### Cómo funciona la sesión
+
+- La contraseña se guarda como hash **Argon2id** (19 MiB, 2 iteraciones, 1 lane).
+- El login crea una fila en `sessions` y emite la cookie `ad_session`:
+  `httpOnly`, `sameSite=lax`, `Secure` **solo** si `APP_BASE_URL` empieza por `https://`.
+- En la base de datos solo se guarda `sha256(token)`: un volcado de la base de datos no
+  permite suplantar una sesión.
+- Caducidad fija de 30 días. No hay renovación deslizante.
+- Cerrar sesión borra la fila y la cookie, así que el logout es real (no basta con
+  borrar la cookie en el cliente).
+
+### Si olvidas la contraseña
+
+No hay recuperación por email (no hay SMTP). Se cambia desde la máquina donde corre
+Docker:
+
+```bash
+./scripts/reset-password.sh nuevo@email.com 'la-contraseña-nueva'
+```
 
 ---
 
@@ -182,6 +201,75 @@ También puedes comprobar el healthcheck de Docker:
 ```bash
 docker compose ps          # la columna STATUS debe decir (healthy) en ambos servicios
 ```
+
+Y con el smoke test, que recorre la API de verdad:
+
+```bash
+SMOKE_EMAIL=tucorreo@example.com SMOKE_PASSWORD='tu-contraseña' ./scripts/smoke.sh
+```
+
+Comprueba autenticación, alta de proyecto, etiqueta y tarea, subtareas, cambios de estado,
+validación de errores y limpieza. No deja datos en la base de datos.
+
+---
+
+## API HTTP
+
+Todos los endpoints exigen sesión de usuario (cookie `ad_session`) salvo los de autenticación
+y `/api/health`. Los agentes usarán tokens Bearer en `/api/v1` (Fase 5).
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| `GET` | `/api/health` | Estado de la app y de la base de datos |
+| `GET` | `/api/auth/setup` | `{ available }`: si aún se puede crear el primer usuario |
+| `POST` | `/api/auth/setup` | Crea el primer usuario. `409` si ya existe alguno |
+| `POST` | `/api/auth/login` | Inicia sesión y emite la cookie |
+| `POST` | `/api/auth/logout` | Borra la sesión y la cookie |
+| `GET` | `/api/auth/me` | Usuario actual, o `401` |
+| `GET` `POST` | `/api/projects` | Listar / crear proyectos (`?includeArchived=1`) |
+| `GET` `PATCH` `DELETE` | `/api/projects/:id` | Leer, editar o borrar un proyecto |
+| `GET` `POST` | `/api/tasks` | Listar / crear tareas (filtros abajo) |
+| `GET` `PATCH` `DELETE` | `/api/tasks/:id` | Leer (con subtareas), editar o borrar |
+| `GET` `POST` | `/api/labels` | Listar / crear etiquetas (idempotente por nombre) |
+| `DELETE` | `/api/labels/:id` | Borrar una etiqueta |
+
+Filtros de `GET /api/tasks`, todos opcionales:
+
+| Parámetro | Ejemplo | Efecto |
+|---|---|---|
+| `projectId` | `?projectId=<uuid>` | Solo ese proyecto |
+| `status` | `?status=todo,in_progress` | Lista separada por comas |
+| `priority` | `?priority=urgent,high` | Lista separada por comas |
+| `assigneeType` | `?assigneeType=agent` | `human` o `agent` |
+| `q` | `?q=cve` | Busca en el título (case-insensitive) |
+| `rootOnly` | `?rootOnly=1` | Excluye subtareas |
+| `inbox` | `?inbox=1` | Sin proyecto y sin fecha |
+| `order` | `?order=dueDate` | `manual`, `dueDate`, `priority`, `created` |
+
+Ejemplo completo:
+
+```bash
+curl -s -b cookies.txt 'http://192.168.1.50:3000/api/tasks?status=todo&order=dueDate' | jq
+```
+
+Los valores mal formados se descartan en lugar de devolver `422`: un enlace guardado
+antiguo debe seguir mostrando algo útil.
+
+---
+
+## Pruebas
+
+```bash
+npm test              # Vitest: lógica de dominio y validación (rápido, sin base de datos)
+npm run typecheck     # tsc --noEmit, en modo estricto
+./scripts/smoke.sh    # Prueba de humo de la API contra una instalación en marcha
+```
+
+Las pruebas unitarias no tocan la base de datos: cubren lo que se puede equivocar sin
+infraestructura (parseo de fechas locales, filtros de la API, esquemas de validación).
+Todo lo que necesita Postgres se comprueba con `scripts/smoke.sh`.
+
+`npm test` es un `vitest run`: no se queda en modo vigilancia.
 
 ---
 
@@ -262,22 +350,40 @@ Tablas creadas por la migración inicial (`drizzle/0000_init.sql`):
 
 ```
 app/                  Rutas de Next.js (App Router)
+  (auth)/             Login y asistente de primer arranque
+  (app)/              Zona autenticada: shell con sidebar
   api/health/         Healthcheck
-  layout.tsx          Layout raíz (tema claro/oscuro)
+  api/auth/           setup, login, logout, me
+  api/projects/       CRUD de proyectos
+  api/tasks/          CRUD de tareas y subtareas
+  api/labels/         Etiquetas
 components/
+  auth/               Formularios de login y setup
+  projects/           Listado, diálogo y espacio de trabajo del proyecto
+  shell/              Sidebar, topbar, navegación móvil, tema
+  tasks/              Lista, tablero, panel de detalle, campos, hook de mutaciones
   ui/                 Primitivas estilo shadcn/ui (Radix + Tailwind)
 docker/
   entrypoint.sh       Aplica migraciones y arranca el servidor
 drizzle/              Migraciones SQL versionadas (se commitean)
 lib/
+  api/                Helpers HTTP, errores, parseo de filtros
+  auth/               Hash de contraseñas (Argon2id) y sesiones
   db/
     schema.ts         Esquema Drizzle — fuente de verdad del modelo
     client.ts         Pool de Postgres (perezoso)
+  domain/             Reglas de negocio: proyectos, tareas, etiquetas, actividad
+  constants.ts        Metadatos de estados y prioridades (seguro en cliente)
+  dates.ts            Fechas sin sustos de zona horaria
+  types.ts            Contratos JSON entre servidor y cliente
   env.ts              Validación de variables de entorno con Zod
 scripts/
   migrate.ts          Runner de migraciones (se empaqueta en la imagen)
+  reset-password.ts   Cambio de contraseña sin SMTP (se empaqueta en la imagen)
+  reset-password.sh   Envoltorio sobre el contenedor
   reset-db.ts         Reinicio destructivo para desarrollo
   verify.sh           Comprobación de extremo a extremo
+  smoke.sh            Prueba de humo de la API
 Dockerfile            Build multi-stage, multi-arquitectura
 docker-compose.yml    App + Postgres (el mismo en Mac mini y Proxmox)
 ```

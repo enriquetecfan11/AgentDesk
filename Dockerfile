@@ -24,14 +24,17 @@ ENV NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Bundle the migration runner into a single self-contained file so the
-# runtime stage needs no devDependencies (drizzle-kit) at all.
+# Bundle the migration runner and the password-reset tool into self-contained
+# files so the runtime stage needs no devDependencies (drizzle-kit, tsx) at all.
+# `@node-rs/argon2` is left external: it is a native .node binary that must not
+# be inlined, and it is copied into the runner image explicitly below.
 RUN npx esbuild scripts/migrate.ts \
-      --bundle \
-      --platform=node \
-      --target=node22 \
-      --format=esm \
-      --outfile=migrate.mjs
+      --bundle --platform=node --target=node22 --format=esm \
+      --outfile=migrate.mjs \
+ && npx esbuild scripts/reset-password.ts \
+      --bundle --platform=node --target=node22 --format=esm \
+      --external:@node-rs/argon2 \
+      --outfile=reset-password.mjs
 
 RUN npm run build
 
@@ -52,7 +55,13 @@ COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=build --chown=nextjs:nodejs /app/public ./public
 COPY --from=build --chown=nextjs:nodejs /app/drizzle ./drizzle
 COPY --from=build --chown=nextjs:nodejs /app/migrate.mjs ./migrate.mjs
+COPY --from=build --chown=nextjs:nodejs /app/reset-password.mjs ./reset-password.mjs
 COPY --chown=nextjs:nodejs docker/entrypoint.sh ./entrypoint.sh
+
+# @node-rs/argon2 loads its prebuilt .node binary through a dynamic require,
+# which Next's output tracer cannot follow. Copy the platform packages
+# explicitly (npm only installs the one matching the build architecture).
+COPY --from=deps --chown=nextjs:nodejs /app/node_modules/@node-rs ./node_modules/@node-rs
 
 RUN chmod +x ./entrypoint.sh \
  && mkdir -p /app/uploads \

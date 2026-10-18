@@ -15,6 +15,7 @@
 # production
 /build
 /migrate.mjs
+/reset-password.mjs
 
 # runtime data
 /uploads
