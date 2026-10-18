@@ -21,6 +21,12 @@ Todo corre en tu propia máquina. Sin servicios externos, sin cuentas, sin telem
 - [Variables de entorno](#variables-de-entorno)
 - [Cómo crear el primer usuario](#cómo-crear-el-primer-usuario)
 - [Comprobar que funciona](#comprobar-que-funciona)
+- [API HTTP](#api-http)
+- [Captura rápida](#captura-rápida)
+- [Atajos de teclado](#atajos-de-teclado)
+- [Notas](#notas)
+- [Agentes y API v1](#agentes-y-api-v1)
+- [Pruebas](#pruebas)
 - [Desarrollo](#desarrollo)
 - [Base de datos y migraciones](#base-de-datos-y-migraciones)
 - [Estructura del repositorio](#estructura-del-repositorio)
@@ -35,7 +41,7 @@ Todo corre en tu propia máquina. Sin servicios externos, sin cuentas, sin telem
 | 2 | Auth + layout + proyectos + tareas (lista y Kanban) | ✅ |
 | 3 | Inbox, Today, Upcoming, captura rápida, recurrencias, paleta de comandos | ✅ |
 | 4 | Notas con backlinks e import/export markdown | ✅ |
-| 5 | Agentes, tokens, API REST v1, delegaciones, runs, SSE | ⏳ |
+| 5 | Agentes, tokens, API REST v1, delegaciones, runs, SSE | ✅ |
 | 6 | Webhooks, OpenAPI, servidor MCP | ⏳ |
 | 7 | Backup/restore y guía de migración Mac mini → Proxmox | ⏳ |
 | 8 | Tests, accesibilidad, rendimiento, README final | ⏳ |
@@ -57,6 +63,7 @@ Todo corre en tu propia máquina. Sin servicios externos, sin cuentas, sin telem
 │        │  · /api/health                         │            │
 │        │  · /api/v1/**  (token de agente)       │            │
 │        │  · /api/events (SSE)                   │            │
+│        │  · /api/v1/events (SSE de agentes)     │            │
 │        └────────────────┬───────────────────────┘            │
 │                         │  host: "db"                        │
 │                         ▼                                    │
@@ -209,14 +216,17 @@ SMOKE_EMAIL=tucorreo@example.com SMOKE_PASSWORD='tu-contraseña' ./scripts/smoke
 ```
 
 Comprueba autenticación, alta de proyecto, etiqueta y tarea, subtareas, cambios de estado,
-validación de errores y limpieza. No deja datos en la base de datos.
+captura rápida, recurrencias, notas y enlaces, agentes con su token, la API `/api/v1` completa
+(tareas, comentarios, cola, delegaciones, runs, logs, artefactos y SSE), el aislamiento entre
+agentes y la revocación de tokens. No deja datos en la base de datos.
 
 ---
 
 ## API HTTP
 
-Todos los endpoints exigen sesión de usuario (cookie `ad_session`) salvo los de autenticación
-y `/api/health`. Los agentes usarán tokens Bearer en `/api/v1` (Fase 5).
+Los endpoints de la izquierda exigen **sesión de usuario** (cookie `ad_session`). Los de
+`/api/v1/**` exigen **token de agente** (`Authorization: Bearer agt_…`) y se documentan en
+[Agentes y API v1](#agentes-y-api-v1).
 
 | Método | Ruta | Descripción |
 |---|---|---|
@@ -238,6 +248,16 @@ y `/api/health`. Los agentes usarán tokens Bearer en `/api/v1` (Fase 5).
 | `GET` `PATCH` `DELETE` | `/api/notes/:id` | Nota con sus backlinks y enlaces salientes |
 | `POST` | `/api/notes/import` | Importar varios `.md` (`{ files: [{ name, content }], overwrite }`) |
 | `GET` | `/api/notes/export` | Descargar el vault completo en un `.zip` |
+| `GET` `POST` | `/api/agents` | Listar / crear agentes (`?archived=true`) |
+| `GET` `PATCH` `DELETE` | `/api/agents/:id` | Agente con sus tokens, delegaciones y runs |
+| `GET` `POST` | `/api/agents/:id/tokens` | Listar / emitir tokens (el secreto sale una sola vez) |
+| `DELETE` | `/api/tokens/:id` | Revocar un token (`?hard=true` para borrarlo) |
+| `GET` `POST` | `/api/delegations` | Listar / crear delegaciones (`?agentId=&taskId=&status=`) |
+| `GET` `PATCH` | `/api/delegations/:id` | Leer; aprobar, cancelar o cambiar de estado |
+| `GET` | `/api/runs` | Listar runs (`?agentId=&taskId=&status=`) |
+| `GET` | `/api/runs/:id` | Run con sus logs y artefactos |
+| `GET` | `/api/events` | Flujo SSE de la UI: tareas, runs y actividad en vivo |
+| `GET` | `/api/artifacts/:id` | Descargar un artefacto (sesión **o** token con `runs:read`) |
 
 Filtros de `GET /api/tasks`, todos opcionales:
 
@@ -400,6 +420,266 @@ envía como JSON, así que el servidor no tiene que descomprimir nada.
 
 ---
 
+## Agentes y API v1
+
+Un agente es una identidad con **su propio token y sus propios scopes**. No hay login de
+agentes ni sesiones: cada petición lleva el token en la cabecera.
+
+```
+Authorization: Bearer agt_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+```
+
+### Crear un agente y su primer token
+
+Desde la UI: **Agentes → Nuevo agente**, y en su ficha **Crear token**.
+
+Desde la terminal:
+
+```bash
+BASE="http://192.168.1.50:3000"
+
+# 1. Crea el agente (necesitas la cookie de sesión del humano)
+AGENT_ID=$(curl -s -b cookies.txt -X POST "$BASE/api/agents" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Wazuh triage","description":"Revisa CVEs y propone parches","capabilities":["revisar CVEs","informes"]}' \
+  | jq -r .agent.id)
+
+# 2. Emite un token. El valor del campo "secret" solo aparece aquí.
+curl -s -b cookies.txt -X POST "$BASE/api/agents/$AGENT_ID/tokens" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"n8n","scopes":["tasks:read","tasks:write","delegations:read","delegations:write","runs:read","runs:write"]}' \
+  | jq
+```
+
+```json
+{
+  "token": {
+    "id": "…", "agentId": "…", "name": "n8n",
+    "tokenPrefix": "agt_9f2c1ab",
+    "scopes": ["tasks:read", "tasks:write", "delegations:read", "delegations:write", "runs:read", "runs:write"],
+    "lastUsedAt": null, "expiresAt": null, "revokedAt": null, "createdAt": "2026-…"
+  },
+  "secret": "agt_9f2c1ab…"
+}
+```
+
+Del token se guarda **solo su `sha256`** y un prefijo de 12 caracteres para poder listarlo. No hay
+forma de volver a verlo: si se pierde, se revoca y se emite otro. Revocar un token surte efecto
+en la siguiente petición, sin caché de por medio.
+
+### Scopes
+
+| Scope | Permite |
+|---|---|
+| `tasks:read` / `tasks:write` | Leer / crear, editar y borrar tareas |
+| `notes:read` / `notes:write` | Leer / escribir notas |
+| `projects:read` / `projects:write` | Leer / crear proyectos |
+| `delegations:read` / `delegations:write` | Ver la cola / aceptar y cerrar delegaciones |
+| `runs:read` / `runs:write` | Leer / abrir runs, escribir logs y adjuntar artefactos |
+| `activity:read` | Leer la actividad |
+
+Dos reglas que ahorran configuraciones rotas:
+
+- **Escribir implica leer** en la misma área: `tasks:write` ya concede `tasks:read`.
+- Un token también puede llevar `"*"`, que concede todo. La UI no lo ofrece; existe para scripts
+  de administración.
+
+Si falta un scope, la respuesta es `403` con el nombre del scope que falta, no un `404`. Un token
+inválido, revocado o caducado devuelve `401`.
+
+### Empezar por la cola
+
+```bash
+BASE="http://192.168.1.50:3000"
+export AD_TOKEN="agt_..."
+
+# ¿Quién soy, qué puedo hacer y cuánto tengo pendiente?
+curl -s -H "Authorization: Bearer $AD_TOKEN" "$BASE/api/v1/me" | jq
+
+# Todo lo que tengo que hacer: delegaciones accionables + tareas asignadas
+curl -s -H "Authorization: Bearer $AD_TOKEN" "$BASE/api/v1/queue" | jq
+```
+
+`/api/v1/me` no exige ningún scope: un token mal configurado puede llamarlo y ver exactamente qué
+scopes tiene.
+
+`/api/v1/queue` devuelve dos listas: las **delegaciones** que el agente puede empezar (ni
+cerradas ni esperando aprobación humana) y las **tareas** que tiene asignadas y siguen abiertas.
+Es el endpoint que un agente consulta al despertar, o para el que se queda escuchando en
+`/api/v1/events`.
+
+### Ciclo completo de una delegación
+
+El humano delega (o el propio agente delega en otro):
+
+```bash
+curl -s -b cookies.txt -X POST "$BASE/api/delegations" \
+  -H 'Content-Type: application/json' \
+  -d '{"toAgentId":"'"$AGENT_ID"'","title":"Revisar CVEs del mes","taskId":"'"$TASK_ID"'","instructions":"Solo críticos y altos"}' | jq
+```
+
+Con `"requiresApproval": true` la delegación **no aparece en la cola** hasta que la apruebes desde
+la ficha del agente. Es la forma de dar trabajo sin dar luz verde.
+
+El agente la trabaja y la cierra:
+
+```bash
+DELEGATION_ID="…"
+
+# Aceptar. El campo opcional "note" se añade como comentario en la tarea asociada,
+# que es donde tú lo vas a leer.
+curl -s -X PATCH "$BASE/api/v1/delegations/$DELEGATION_ID" \
+  -H "Authorization: Bearer $AD_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"status":"in_progress","note":"Revisando el inventario del último mes"}' | jq
+
+curl -s -X PATCH "$BASE/api/v1/delegations/$DELEGATION_ID" \
+  -H "Authorization: Bearer $AD_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"status":"completed"}' | jq
+```
+
+Estados: `pending` → `accepted` → `in_progress` → `completed` / `failed`, más `rejected` y
+`cancelled`. No hay una máquina de estados estricta: un agente que falla y luego lo consigue no
+tiene que pedir permiso para volver a intentarlo. Lo que sí se sella es la aprobación humana
+(`approvedAt`) cuando la delegación la exigía.
+
+Un agente **solo puede tocar sus propias delegaciones**: si el `toAgentId` no es el suyo, `403`.
+
+### Runs: dejar constancia de lo que pasó
+
+```bash
+# Abrir el run (queda ligado a la tarea y a la delegación)
+RUN_ID=$(curl -s -X POST "$BASE/api/v1/runs" \
+  -H "Authorization: Bearer $AD_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"taskId":"'"$TASK_ID"'","delegationId":"'"$DELEGATION_ID"'","status":"running","input":{"rango":"último mes"}}' \
+  | jq -r .run.id)
+```
+
+Abrir un run sobre una delegación **la pone en `in_progress`**: el agente no tiene que decir lo
+mismo dos veces.
+
+```bash
+# Logs, en lote o de una en una
+curl -s -X POST "$BASE/api/v1/runs/$RUN_ID/logs" \
+  -H "Authorization: Bearer $AD_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"logs":[{"level":"info","message":"Consultando inventario"},{"level":"warn","message":"3 hosts sin parchear"}]}' | jq
+
+curl -s -X POST "$BASE/api/v1/runs/$RUN_ID/logs" \
+  -H "Authorization: Bearer $AD_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"message":"Informe listo"}' | jq
+
+# Recuperar lo que ya hay (útil al reconectar)
+curl -s -H "Authorization: Bearer $AD_TOKEN" "$BASE/api/v1/runs/$RUN_ID/logs?since=2026-01-01T00:00:00Z" | jq
+```
+
+Cada línea escrita se empuja por SSE al instante, así que la pantalla del run se rellena sola.
+
+Artefactos: lo que el agente produce y quieres conservar.
+
+```bash
+# Texto pequeño, en línea
+curl -s -X POST "$BASE/api/v1/runs/$RUN_ID/artifacts" \
+  -H "Authorization: Bearer $AD_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"resumen.md","kind":"text","content":"# Resumen\n- 3 hosts sin parchear"}' | jq
+
+# Fichero, en base64 (se escribe en el volumen "uploads")
+curl -s -X POST "$BASE/api/v1/runs/$RUN_ID/artifacts" \
+  -H "Authorization: Bearer $AD_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"detalle.csv","kind":"file","mimeType":"text/csv","contentBase64":"'"$(base64 < detalle.csv)"'"}' | jq
+```
+
+Se usa JSON también para los ficheros (no `multipart/form-data`) para que un agente no necesite
+más que un cliente HTTP. El límite está en el esquema: 8 MB en base64.
+
+Cerrar el run:
+
+```bash
+curl -s -X PATCH "$BASE/api/v1/runs/$RUN_ID" \
+  -H "Authorization: Bearer $AD_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"status":"succeeded","output":"3 hosts sin parchear","costUsd":0.042}' | jq
+```
+
+El agente manda **el estado, nunca los tiempos**: el servidor sella `startedAt` al entrar en
+`running`, y `finishedAt` y `durationMs` al cerrar. Y si el run venía de una delegación, cerrarlo
+la cierra con él (`succeeded` → `completed`, cualquier otra cosa → `failed`).
+
+### Server-Sent Events
+
+```bash
+curl -N -H "Authorization: Bearer $AD_TOKEN" "$BASE/api/v1/events"
+```
+
+```
+event: hello
+data: {"at":"2026-…","agentId":"…","agentName":"Wazuh triage"}
+
+event: run.log
+data: {"id":"…","runId":"…","level":"warn","message":"3 hosts sin parchear",…}
+
+event: delegation.updated
+data: {"id":"…","status":"in_progress","agentId":"…"}
+
+event: task.changed
+data: {"id":"…","action":"updated"}
+```
+
+| Evento | Cuándo |
+|---|---|
+| `hello` | Al abrir el flujo |
+| `run.log` | Cada línea de log |
+| `run.updated` | Un run cambia de estado |
+| `run.artifact` | Se adjunta un artefacto |
+| `delegation.updated` | Cambia una delegación |
+| `task.changed`, `note.changed`, `task.comment`, `activity` | Cambios en el resto del workspace |
+
+El flujo del agente **solo recibe sus propios eventos `run.*`**: son datos suyos. Los eventos
+genéricos (tareas, actividad) no llevan más que un identificador, porque el agente ya puede pedir
+el resto por su cuenta. Un `: keep-alive` cada 25 s mantiene la conexión abierta.
+
+La UI tiene su propio flujo en `/api/events` (con la cookie de sesión). El shell lo escucha y
+refresca lo que se esté viendo, con un *debounce* de 400 ms: un run que escribe cincuenta líneas
+en un segundo provoca un render, no cincuenta.
+
+### Notas de implementación
+
+- **Los comentarios de tarea son entradas de actividad** (`action = "task.comment"`, el texto en
+  `meta.body`). Ya necesitaban lo mismo que la cronología —autor humano o agente, fecha y
+  cuerpo—, así que reutilizar la tabla los deja **solo-añadir** y los pone gratis en la actividad
+  unificada. El precio, documentado aquí: un comentario no se puede editar ni borrar.
+- **Una tarea que abre un agente se le asigna a él** si no dice otra cosa, que es lo que la hace
+  aparecer en su propia cola. Reasignarla desde la UI es un clic.
+- **El bus de SSE vive en el proceso.** La app corre como un único proceso Node en un contenedor,
+  así que no hace falta Redis ni un broker. Si algún día se escala a varias réplicas, `lib/realtime.ts`
+  es el único módulo que habría que cambiar.
+- **Los artefactos de fichero se borran con su run o con su agente**, antes de que las filas
+  desaparezcan en cascada: las filas las borra Postgres, los ficheros los borra la app.
+- Cualquier acción de un agente queda en la actividad con `actor_type = 'agent'`, así que todo lo
+  que hace es auditable desde `/activity` (hay un filtro **Personas / Agentes**).
+
+### Endpoints de la API v1
+
+| Método | Ruta | Scope |
+|---|---|---|
+| `GET` | `/api/v1/me` | — |
+| `GET` | `/api/v1/queue` | `delegations:read` |
+| `GET` `POST` | `/api/v1/tasks` | `tasks:read` / `tasks:write` |
+| `GET` `PATCH` `DELETE` | `/api/v1/tasks/:id` | `tasks:read` / `tasks:write` |
+| `GET` `POST` | `/api/v1/tasks/:id/comments` | `tasks:read` / `tasks:write` |
+| `GET` `POST` | `/api/v1/projects` | `projects:read` / `projects:write` |
+| `GET` `POST` | `/api/v1/notes` | `notes:read` / `notes:write` |
+| `GET` `PATCH` | `/api/v1/notes/:id` | `notes:read` / `notes:write` |
+| `GET` `POST` | `/api/v1/delegations` | `delegations:read` / `delegations:write` |
+| `GET` `PATCH` | `/api/v1/delegations/:id` | `delegations:read` / `delegations:write` |
+| `GET` `POST` | `/api/v1/runs` | `runs:read` / `runs:write` |
+| `GET` `PATCH` | `/api/v1/runs/:id` | `runs:read` / `runs:write` |
+| `GET` `POST` | `/api/v1/runs/:id/logs` | `runs:read` / `runs:write` |
+| `GET` `POST` | `/api/v1/runs/:id/artifacts` | `runs:read` / `runs:write` |
+| `GET` | `/api/v1/events` | — (token válido) |
+
+Los filtros de `/api/v1/tasks` son los mismos que los de `/api/tasks`. Los `id` de agente, tarea,
+run y delegación son siempre UUID: un id mal formado devuelve `404`, no un error de base de datos.
+
+---
+
 ## Pruebas
 
 ```bash
@@ -411,7 +691,8 @@ npm run typecheck     # tsc --noEmit, en modo estricto
 Las pruebas unitarias no tocan la base de datos: cubren lo que se puede equivocar sin
 infraestructura (parseo de fechas locales, filtros de la API, esquemas de validación, la captura
 en lenguaje natural, el motor de recurrencias, el parser de Markdown, el frontmatter, los
-wikilinks y el escritor de ZIP).
+wikilinks, el escritor de ZIP y las reglas de los tokens de agente: formato, cabecera `Bearer` e
+implicación de scopes).
 Todo lo que necesita Postgres se comprueba con `scripts/smoke.sh`, que ejercita la API de punta a
 punta contra la instalación en marcha.
 
@@ -503,6 +784,10 @@ app/                  Rutas de Next.js (App Router)
     upcoming/         Calendario de mes + día seleccionado
     tasks/            Lista y tablero, con filtros
     projects/         Listado y espacio de trabajo del proyecto
+    notes/            Notas y vault
+    agents/           Listado de agentes y ficha (tokens, delegaciones, runs)
+    runs/             Historial de ejecuciones y detalle en vivo
+    activity/         Cronología unificada de humanos y agentes
   api/health/         Healthcheck
   api/auth/           setup, login, logout, me
   api/capture/        Captura rápida en lenguaje natural
@@ -511,27 +796,41 @@ app/                  Rutas de Next.js (App Router)
   api/projects/       CRUD de proyectos
   api/tasks/          CRUD de tareas y subtareas
   api/labels/         Etiquetas
+  api/agents/         Agentes y sus tokens
+  api/tokens/         Revocación de tokens
+  api/delegations/    Delegaciones vistas desde el humano
+  api/runs/           Runs vistos desde el humano
+  api/artifacts/      Descarga de artefactos (sesión o token)
+  api/events/         SSE para la UI
+  api/v1/             API de agentes: Bearer, scopes, cola, runs, SSE
 components/
+  agents/             Listado de agentes, ficha, token y diálogo de delegación
   auth/               Formularios de login y setup
   capture/            Caja de captura con vista previa del análisis
   notes/              Listado, editor, renderizador de Markdown y diálogo de importación
   projects/           Listado, diálogo y espacio de trabajo del proyecto
-  shell/              Sidebar, topbar, navegación móvil, tema, paleta y atajos
+  runs/               Listado de runs y detalle con logs en vivo
+  shell/              Sidebar, topbar, navegación móvil, tema, paleta, atajos y refresco SSE
   tasks/              Lista, tablero, secciones, calendario, panel de detalle, hook
   ui/                 Primitivas estilo shadcn/ui (Radix + Tailwind)
 docker/
   entrypoint.sh       Aplica migraciones y arranca el servidor
 drizzle/              Migraciones SQL versionadas (se commitean)
 lib/
+  agent-token.ts      Formato, scopes y cabecera Bearer de los tokens (puro, con tests)
   api/                Helpers HTTP, errores, parseo de filtros
-  auth/               Hash de contraseñas (Argon2id) y sesiones
+  auth/               Hash de contraseñas (Argon2id), sesiones y tokens de agente
   capture.ts          Parser de lenguaje natural (puro, con tests)
   recurrence.ts       Motor de recurrencias RRULE reducido (puro, con tests)
   db/
     schema.ts         Esquema Drizzle — fuente de verdad del modelo
     client.ts         Pool de Postgres (perezoso)
-  domain/             Reglas de negocio: proyectos, tareas, etiquetas, captura, actividad
+  domain/             Reglas de negocio: proyectos, tareas, notas, agentes, delegaciones,
+                      runs, comentarios y actividad
+  realtime.ts         Bus de eventos en proceso para SSE
+  storage.ts          Artefactos en el volumen "uploads"
   constants.ts        Metadatos de estados y prioridades (seguro en cliente)
+  clipboard.ts        Copiar al portapapeles, con alternativa para HTTP plano
   dates.ts            Fechas sin sustos de zona horaria
   events.ts           Señales entre componentes del shell
   notes/              Markdown a nodos, frontmatter y wikilinks (puro, con tests)

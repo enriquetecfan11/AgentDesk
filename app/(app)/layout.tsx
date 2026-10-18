@@ -1,5 +1,6 @@
 import { AppCommands } from '@/components/shell/app-commands';
 import { AppSidebar } from '@/components/shell/app-sidebar';
+import { LiveUpdates } from '@/components/shell/live-updates';
 import { Topbar } from '@/components/shell/topbar';
 import { requireUser } from '@/lib/auth/session';
 
@@ -24,6 +25,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
       {/* Keyboard shortcuts and the command palette live above every page. */}
       <AppCommands />
+      {/* Live channel: tasks, runs and the timeline, pushed from the server. */}
+      <LiveUpdates />
     </div>
   );
 }

@@ -124,3 +124,143 @@ export type NoteDetailDTO = {
   /** Other notes sharing the same project, used as a plain "related" list. */
   related: NoteRef[];
 };
+
+// ---------------------------------------------------------------------------
+// Agents and credentials
+// ---------------------------------------------------------------------------
+
+export type AgentRef = { id: string; name: string };
+
+export type AgentDTO = {
+  id: string;
+  name: string;
+  description: string | null;
+  capabilities: string[];
+  status: 'active' | 'paused' | 'archived';
+  createdAt: string;
+  updatedAt: string;
+  /** Live tokens (not revoked). */
+  tokenCount: number;
+  /** Delegations waiting for the agent or for a human approval. */
+  openDelegations: number;
+  activeRuns: number;
+  lastRunAt: string | null;
+};
+
+/** A token as it is listed. The secret itself is never in here. */
+export type ApiTokenDTO = {
+  id: string;
+  agentId: string;
+  name: string;
+  tokenPrefix: string;
+  scopes: string[];
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+};
+
+/** Returned exactly once, when the token is created. */
+export type ApiTokenCreatedDTO = {
+  token: ApiTokenDTO;
+  /** The only time this value exists outside the agent's own configuration. */
+  secret: string;
+};
+
+// ---------------------------------------------------------------------------
+// Delegations
+// ---------------------------------------------------------------------------
+
+export type DelegationDTO = {
+  id: string;
+  fromType: 'human' | 'agent' | 'system';
+  fromId: string | null;
+  toAgentId: string;
+  taskId: string | null;
+  title: string;
+  instructions: string | null;
+  status:
+    | 'pending'
+    | 'accepted'
+    | 'in_progress'
+    | 'completed'
+    | 'failed'
+    | 'rejected'
+    | 'cancelled';
+  requiresApproval: boolean;
+  approvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  agent: AgentRef | null;
+  task: { id: string; title: string; status: string } | null;
+};
+
+// ---------------------------------------------------------------------------
+// Runs
+// ---------------------------------------------------------------------------
+
+export type RunDTO = {
+  id: string;
+  agentId: string;
+  taskId: string | null;
+  delegationId: string | null;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  input: unknown;
+  output: string | null;
+  error: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  durationMs: number | null;
+  costUsd: number | null;
+  createdAt: string;
+  updatedAt: string;
+  agent: AgentRef | null;
+  task: { id: string; title: string } | null;
+  logCount: number;
+  artifactCount: number;
+};
+
+export type RunLogDTO = {
+  id: string;
+  runId: string;
+  level: 'debug' | 'info' | 'warn' | 'error';
+  message: string;
+  createdAt: string;
+};
+
+export type ArtifactDTO = {
+  id: string;
+  runId: string | null;
+  taskId: string | null;
+  name: string;
+  kind: 'file' | 'text' | 'url';
+  mimeType: string | null;
+  sizeBytes: number | null;
+  /** Inline body, only for `kind = 'text'`. */
+  content: string | null;
+  /** Where to fetch a stored file, only for `kind = 'file'`. */
+  downloadUrl: string | null;
+  createdAt: string;
+};
+
+export type RunDetailDTO = {
+  run: RunDTO;
+  logs: RunLogDTO[];
+  artifacts: ArtifactDTO[];
+};
+
+/** What an agent sees when it asks for work. */
+export type QueueDTO = {
+  agent: { id: string; name: string; status: string; capabilities: string[] };
+  delegations: DelegationDTO[];
+  tasks: TaskDTO[];
+};
+
+export type TaskCommentDTO = {
+  id: string;
+  taskId: string;
+  authorType: 'human' | 'agent' | 'system';
+  authorName: string;
+  body: string;
+  createdAt: string;
+};

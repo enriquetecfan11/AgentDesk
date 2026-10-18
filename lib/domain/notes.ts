@@ -8,6 +8,7 @@ import { serializeNote } from '@/lib/domain/serialize';
 import { markdownFileToNote, noteToMarkdownFile } from '@/lib/notes/frontmatter';
 import { markdownToPlainText } from '@/lib/notes/markdown';
 import { extractWikiLinks, normalizeTitle } from '@/lib/notes/wikilinks';
+import { publish } from '@/lib/realtime';
 import type { NoteDetailDTO, NoteListItemDTO, NoteRef } from '@/lib/types';
 import type { NoteCreateInput, NoteImportInput, NoteUpdateInput } from '@/lib/validation';
 
@@ -307,6 +308,7 @@ export async function createNote(input: NoteCreateInput): Promise<NoteDetailDTO>
   // pointing at with a dangling `[[link]]`.
   await rebuildAllLinks();
 
+  publish('note.changed', { id, action: 'created' });
   return (await getNote(id))!;
 }
 
@@ -347,11 +349,13 @@ export async function updateNote(
     await rebuildLinks(id);
   }
 
+  publish('note.changed', { id, action: renamed ? 'renamed' : 'updated' });
   return getNote(id);
 }
 
 export async function deleteNote(id: string): Promise<boolean> {
   const [row] = await db.delete(notes).where(eq(notes.id, id)).returning({ id: notes.id });
+  if (row) publish('note.changed', { id, action: 'deleted' });
   return Boolean(row);
 }
 

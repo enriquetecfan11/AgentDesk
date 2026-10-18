@@ -14,6 +14,7 @@ import {
 import { todayIso } from '@/lib/dates';
 import { serializeTask } from '@/lib/domain/serialize';
 import { firstOccurrence, nextOccurrence, parseRecurrence } from '@/lib/recurrence';
+import { publish } from '@/lib/realtime';
 import type { LabelRef, ProjectRef, TaskDTO } from '@/lib/types';
 import type { TaskCreateInput, TaskUpdateInput } from '@/lib/validation';
 
@@ -245,6 +246,7 @@ export async function createTask(input: TaskCreateInput): Promise<TaskDTO> {
     await setTaskLabels(row.id, input.labelIds);
   }
 
+  publish('task.changed', { id: row.id, action: 'created' });
   return (await getTask(row.id))!;
 }
 
@@ -304,11 +306,13 @@ export async function updateTask(
   const [row] = await db.update(tasks).set(patch).where(eq(tasks.id, id)).returning();
   if (!row) return null;
 
+  publish('task.changed', { id, action: 'updated' });
   return { task: (await getTask(id))!, recurrenceAdvanced };
 }
 
 export async function deleteTask(id: string): Promise<boolean> {
   const rows = await db.delete(tasks).where(eq(tasks.id, id)).returning({ id: tasks.id });
+  if (rows.length > 0) publish('task.changed', { id, action: 'deleted' });
   return rows.length > 0;
 }
 

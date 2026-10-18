@@ -121,3 +121,104 @@ export const PROJECT_COLORS = [
   '#14b8a6',
   '#64748b',
 ] as const;
+
+// ---------------------------------------------------------------------------
+// Agents
+// ---------------------------------------------------------------------------
+
+export const AGENT_STATUSES = ['active', 'paused', 'archived'] as const;
+export type AgentStatusValue = (typeof AGENT_STATUSES)[number];
+
+export const AGENT_STATUS_META: Record<
+  AgentStatusValue,
+  { label: string; dot: string; text: string }
+> = {
+  active: { label: 'Activo', dot: 'bg-emerald-500', text: 'text-emerald-600 dark:text-emerald-500' },
+  paused: { label: 'En pausa', dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-500' },
+  archived: {
+    label: 'Archivado',
+    dot: 'bg-zinc-400',
+    text: 'text-muted-foreground',
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Delegations
+// ---------------------------------------------------------------------------
+
+export const DELEGATION_STATUSES = [
+  'pending',
+  'accepted',
+  'in_progress',
+  'completed',
+  'failed',
+  'rejected',
+  'cancelled',
+] as const;
+export type DelegationStatusValue = (typeof DELEGATION_STATUSES)[number];
+
+export const DELEGATION_STATUS_META: Record<
+  DelegationStatusValue,
+  { label: string; dot: string; text: string }
+> = {
+  pending: { label: 'Pendiente', dot: 'bg-zinc-400', text: 'text-muted-foreground' },
+  accepted: { label: 'Aceptada', dot: 'bg-blue-500', text: 'text-blue-600 dark:text-blue-400' },
+  in_progress: {
+    label: 'En curso',
+    dot: 'bg-amber-500',
+    text: 'text-amber-600 dark:text-amber-500',
+  },
+  completed: {
+    label: 'Completada',
+    dot: 'bg-emerald-500',
+    text: 'text-emerald-600 dark:text-emerald-500',
+  },
+  failed: { label: 'Fallida', dot: 'bg-red-500', text: 'text-red-600 dark:text-red-400' },
+  rejected: { label: 'Rechazada', dot: 'bg-red-400', text: 'text-red-600 dark:text-red-400' },
+  cancelled: { label: 'Cancelada', dot: 'bg-zinc-300 dark:bg-zinc-600', text: 'text-muted-foreground' },
+};
+
+/** Delegations an agent still has to act on. */
+export const OPEN_DELEGATION_STATUSES: DelegationStatusValue[] = [
+  'pending',
+  'accepted',
+  'in_progress',
+];
+
+// ---------------------------------------------------------------------------
+// Runs
+// ---------------------------------------------------------------------------
+
+export const RUN_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'cancelled'] as const;
+export type RunStatusValue = (typeof RUN_STATUSES)[number];
+
+export const RUN_STATUS_META: Record<
+  RunStatusValue,
+  { label: string; dot: string; text: string }
+> = {
+  queued: { label: 'En cola', dot: 'bg-zinc-400', text: 'text-muted-foreground' },
+  running: { label: 'Ejecutando', dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-500' },
+  succeeded: {
+    label: 'Correcta',
+    dot: 'bg-emerald-500',
+    text: 'text-emerald-600 dark:text-emerald-500',
+  },
+  failed: { label: 'Fallida', dot: 'bg-red-500', text: 'text-red-600 dark:text-red-400' },
+  cancelled: { label: 'Cancelada', dot: 'bg-zinc-300 dark:bg-zinc-600', text: 'text-muted-foreground' },
+};
+
+/** Statuses that close a run; a run in one of these never changes again. */
+export const TERMINAL_RUN_STATUSES: RunStatusValue[] = ['succeeded', 'failed', 'cancelled'];
+
+export const RUN_LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
+export type RunLogLevelValue = (typeof RUN_LOG_LEVELS)[number];
+
+export const RUN_LOG_LEVEL_META: Record<RunLogLevelValue, { label: string; text: string }> = {
+  debug: { label: 'debug', text: 'text-muted-foreground' },
+  info: { label: 'info', text: 'text-foreground' },
+  warn: { label: 'warn', text: 'text-amber-600 dark:text-amber-500' },
+  error: { label: 'error', text: 'text-red-600 dark:text-red-400' },
+};
+
+export const ARTIFACT_KINDS = ['file', 'text', 'url'] as const;
+export type ArtifactKindValue = (typeof ARTIFACT_KINDS)[number];

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { isAgentScope } from '@/lib/agent-token';
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@/lib/constants';
 import { parseRecurrence } from '@/lib/recurrence';
 
@@ -198,6 +199,126 @@ export const noteImportSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Agents
+// ---------------------------------------------------------------------------
+
+export const agentCreateSchema = z.object({
+  name: z.string().trim().min(1, 'El nombre es obligatorio').max(120),
+  description: z.string().trim().max(2000).nullish(),
+  capabilities: z.array(z.string().trim().min(1).max(60)).max(30).optional(),
+  status: z.enum(['active', 'paused', 'archived']).default('active'),
+});
+
+export const agentUpdateSchema = agentCreateSchema.partial();
+
+/** `null` means "never expires". */
+const expiresAt = z.iso.datetime({ offset: true }).nullish();
+
+export const tokenCreateSchema = z.object({
+  name: z.string().trim().min(1).max(80).default('default'),
+  scopes: z
+    .array(z.string().trim().min(1).max(40))
+    .min(1, 'Elige al menos un scope')
+    .max(40)
+    .refine((values) => values.every((value) => isAgentScope(value) || value === '*'), {
+      message: 'Hay un scope desconocido',
+    }),
+  expiresAt,
+});
+
+// ---------------------------------------------------------------------------
+// Delegations
+// ---------------------------------------------------------------------------
+
+export const delegationCreateSchema = z.object({
+  toAgentId: z.uuid(),
+  title: z.string().trim().min(1, 'El título es obligatorio').max(300),
+  instructions: z.string().trim().max(20000).nullish(),
+  taskId: z.uuid().nullish(),
+  requiresApproval: z.boolean().default(false),
+});
+
+export const delegationUpdateSchema = z.object({
+  status: z.enum([
+    'pending',
+    'accepted',
+    'in_progress',
+    'completed',
+    'failed',
+    'rejected',
+    'cancelled',
+  ]),
+  /** Appended to the delegation as an activity entry. */
+  note: z.string().trim().max(4000).nullish(),
+});
+
+/** The human side only approves or cancels; doing the work is the agent's job. */
+export const delegationReviewSchema = z.object({
+  action: z.enum(['approve', 'cancel']),
+});
+
+// ---------------------------------------------------------------------------
+// Runs
+// ---------------------------------------------------------------------------
+
+export const runCreateSchema = z.object({
+  agentId: z.uuid().nullish(),
+  taskId: z.uuid().nullish(),
+  delegationId: z.uuid().nullish(),
+  input: z.unknown().nullish(),
+  status: z.enum(['queued', 'running']).default('queued'),
+});
+
+export const runUpdateSchema = z.object({
+  status: z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled']).optional(),
+  output: z.string().max(200_000).nullish(),
+  error: z.string().max(20000).nullish(),
+  costUsd: z.number().min(0).max(100_000).nullish(),
+  input: z.unknown().nullish(),
+});
+
+export const runLogCreateSchema = z.object({
+  level: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  message: z.string().min(1).max(20_000),
+});
+
+/** Logs are usually sent in bursts, so the endpoint also takes a batch. */
+export const runLogBatchSchema = z.object({
+  logs: z.array(runLogCreateSchema).min(1).max(500),
+});
+
+const ARTIFACT_MAX_BASE64 = 8_000_000;
+
+export const artifactCreateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(255),
+    kind: z.enum(['file', 'text', 'url']).default('text'),
+    mimeType: z.string().trim().max(120).nullish(),
+    /** Inline body for `kind = 'text'` or `kind = 'url'`. */
+    content: z.string().max(200_000).nullish(),
+    /** Base64 body for `kind = 'file'`. */
+    contentBase64: z.string().max(ARTIFACT_MAX_BASE64).nullish(),
+    runId: z.uuid().nullish(),
+    taskId: z.uuid().nullish(),
+  })
+  .refine(
+    (value) => value.kind !== 'file' || Boolean(value.contentBase64),
+    { message: 'Un artefacto de tipo file necesita contentBase64', path: ['contentBase64'] },
+  )
+  .refine((value) => value.kind !== 'text' || value.content !== undefined, {
+    message: 'Un artefacto de tipo text necesita content',
+    path: ['content'],
+  });
+
+// ---------------------------------------------------------------------------
+// Comments
+// ---------------------------------------------------------------------------
+
+export const commentCreateSchema = z.object({
+  body: z.string().trim().min(1, 'El comentario no puede estar vacío').max(20_000),
+});
+
+// ---------------------------------------------------------------------------
 // Inferred input types
 // ---------------------------------------------------------------------------
 
@@ -212,5 +333,15 @@ export type CaptureInput = z.infer<typeof captureSchema>;
 export type NoteCreateInput = z.infer<typeof noteCreateSchema>;
 export type NoteUpdateInput = z.infer<typeof noteUpdateSchema>;
 export type NoteImportInput = z.infer<typeof noteImportSchema>;
+export type AgentCreateInput = z.infer<typeof agentCreateSchema>;
+export type AgentUpdateInput = z.infer<typeof agentUpdateSchema>;
+export type TokenCreateInput = z.infer<typeof tokenCreateSchema>;
+export type DelegationCreateInput = z.infer<typeof delegationCreateSchema>;
+export type DelegationUpdateInput = z.infer<typeof delegationUpdateSchema>;
+export type RunCreateInput = z.infer<typeof runCreateSchema>;
+export type RunUpdateInput = z.infer<typeof runUpdateSchema>;
+export type RunLogCreateInput = z.infer<typeof runLogCreateSchema>;
+export type ArtifactCreateInput = z.infer<typeof artifactCreateSchema>;
+export type CommentCreateInput = z.infer<typeof commentCreateSchema>;
 
 export { taskStatusSchema as taskStatus, taskPrioritySchema as taskPriority };

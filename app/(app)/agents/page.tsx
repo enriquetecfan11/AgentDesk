@@ -1,11 +1,11 @@
-import { ComingSoon } from '@/components/shell/coming-soon';
+import { AgentsWorkspace } from '@/components/agents/agents-workspace';
+import { listAgents } from '@/lib/domain/agents';
 
-export default function AgentsPage() {
-  return (
-    <ComingSoon
-      title="Agentes"
-      phase={5}
-      description="Alta de agentes, token propio con scopes, cola de trabajo y aprobación o rechazo de delegaciones."
-    />
-  );
+export const dynamic = 'force-dynamic';
+
+/** Agentes: identidades con token propio, cola de trabajo y runs. */
+export default async function AgentsPage() {
+  const agents = await listAgents({ includeArchived: true });
+
+  return <AgentsWorkspace initialAgents={agents} />;
 }

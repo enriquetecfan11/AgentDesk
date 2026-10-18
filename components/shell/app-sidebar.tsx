@@ -43,14 +43,14 @@ const NAV_GROUPS: { items: NavItem[] }[] = [
     items: [
       { href: '/tasks', label: 'Tareas', icon: ListChecks },
       { href: '/projects', label: 'Proyectos', icon: FolderKanban },
-      { href: '/notes', label: 'Notas', icon: NotebookPen, pending: true },
+      { href: '/notes', label: 'Notas', icon: NotebookPen },
     ],
   },
   {
     items: [
       { href: '/activity', label: 'Actividad', icon: Activity },
-      { href: '/agents', label: 'Agentes', icon: Bot, pending: true },
-      { href: '/runs', label: 'Runs', icon: PlayCircle, pending: true },
+      { href: '/agents', label: 'Agentes', icon: Bot },
+      { href: '/runs', label: 'Runs', icon: PlayCircle },
     ],
   },
 ];

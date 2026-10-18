@@ -254,7 +254,7 @@ project_json="$(curl -fsS -b "$JAR" "$BASE/api/search?q=Smoke")"
 # ---------------------------------------------------------------------------
 step "8. Páginas nuevas"
 # ---------------------------------------------------------------------------
-for route in /inbox /today /upcoming /notes; do
+for route in /inbox /today /upcoming /notes /agents /runs; do
   http="$(status -b "$JAR" "$BASE$route")"
   [ "$http" = "200" ] && ok "$route responde 200" || bad "$route responde $http"
 done
@@ -361,7 +361,159 @@ fi
 rm -rf "$ZIP_DIR"
 
 # ---------------------------------------------------------------------------
-step "10. Limpieza"
+step "10. Agentes, tokens y API v1"
+# ---------------------------------------------------------------------------
+# auth_api usa el token del agente; el resto de la sección lo usa para hablar
+# con /api/v1 como lo haría un agente de verdad.
+agent="$(curl -fsS -b "$JAR" -X POST "$BASE/api/agents" -H 'Content-Type: application/json' \
+  -d '{"name":"Agente de humo","description":"Pruebas automáticas","capabilities":["revisar CVEs","informes"]}')"
+AGENT_ID="$(printf '%s' "$agent" | jget agent.id)"
+[ -n "$AGENT_ID" ] && ok "agente creado" || bad "no se creó el agente"
+
+token="$(curl -fsS -b "$JAR" -X POST "$BASE/api/agents/$AGENT_ID/tokens" -H 'Content-Type: application/json' \
+  -d '{"name":"humo","scopes":["tasks:read","tasks:write","delegations:read","delegations:write","runs:read","runs:write","notes:read","notes:write"]}')"
+AGENT_TOKEN="$(printf '%s' "$token" | jget secret)"
+TOKEN_ID="$(printf '%s' "$token" | jget token.id)"
+case "$AGENT_TOKEN" in
+  agt_*) ok "token emitido (se muestra una sola vez)" ;;
+  *) bad "el token no tiene el formato esperado: $AGENT_TOKEN" ;;
+esac
+[ -n "$(printf '%s' "$token" | jget token.tokenPrefix)" ] && ok "del token se guarda solo el prefijo" || bad "falta el prefijo"
+
+# Un segundo token con scopes mínimos: sirve para comprobar que el scope se respeta.
+limited="$(curl -fsS -b "$JAR" -X POST "$BASE/api/agents/$AGENT_ID/tokens" -H 'Content-Type: application/json' \
+  -d '{"name":"solo-runs","scopes":["runs:read"]}')"
+LIMITED_TOKEN="$(printf '%s' "$limited" | jget secret)"
+
+auth_api() { curl -s -H "Authorization: Bearer $AGENT_TOKEN" "$@"; }
+
+[ "$(auth_api "$BASE/api/v1/me" | jget agent.id)" = "$AGENT_ID" ] \
+  && ok "/api/v1/me identifica al agente" || bad "/api/v1/me no devuelve el agente"
+[ "$(auth_api "$BASE/api/v1/me" | jget agent.capabilities.0)" = "revisar CVEs" ] \
+  && ok "las capacidades viajan en /me" || bad "faltan las capacidades en /me"
+[ "$(auth_api "$BASE/api/v1/me" | jget scopes.0)" = "tasks:read" ] \
+  && ok "y los scopes concedidos" || bad "faltan los scopes"
+
+[ "$(status "$BASE/api/v1/me")" = "401" ] && ok "sin token → 401" || bad "sin token no devuelve 401"
+[ "$(status -H "Authorization: Bearer agt_$(printf 'x%.0s' {1..43})" "$BASE/api/v1/me")" = "401" ] \
+  && ok "un token que no existe → 401" || bad "un token inexistente autenticó"
+[ "$(status -H "Authorization: Bearer $LIMITED_TOKEN" "$BASE/api/v1/tasks")" = "403" ] \
+  && ok "scope insuficiente → 403" || bad "el scope no se está comprobando"
+
+# Tareas a través de la API de agentes.
+task="$(auth_api -X POST "$BASE/api/v1/tasks" -H 'Content-Type: application/json' \
+  -d '{"title":"Tarea pedida por un agente","priority":"high"}')"
+AGENT_TASK_ID="$(printf '%s' "$task" | jget task.id)"
+[ -n "$AGENT_TASK_ID" ] && ok "el agente crea tareas" || bad "el agente no pudo crear la tarea"
+[ "$(printf '%s' "$task" | jget task.assigneeId)" = "$AGENT_ID" ] \
+  && ok "una tarea creada por el agente se le asigna a él" || bad "la tarea no se autoasignó"
+
+[ "$(auth_api "$BASE/api/v1/tasks?q=pedida%20por%20un%20agente" | jget tasks.0.id)" = "$AGENT_TASK_ID" ] \
+  && ok "el agente lista sus tareas" || bad "la lista de tareas del agente falló"
+
+comment="$(auth_api -X POST "$BASE/api/v1/tasks/$AGENT_TASK_ID/comments" -H 'Content-Type: application/json' \
+  -d '{"body":"Empiezo por los CVEs críticos."}')"
+[ -n "$(printf '%s' "$comment" | jget comment.id)" ] && ok "el agente comenta en la tarea" || bad "no se pudo comentar"
+[ "$(auth_api "$BASE/api/v1/tasks/$AGENT_TASK_ID" | jget comments.0.authorName)" = "Agente de humo" ] \
+  && ok "el comentario queda en el hilo de la tarea" || bad "el comentario no se guardó"
+
+# Delegación del humano al agente, y su cola de trabajo.
+delegation="$(curl -fsS -b "$JAR" -X POST "$BASE/api/delegations" -H 'Content-Type: application/json' \
+  -d "{\"toAgentId\":\"$AGENT_ID\",\"title\":\"Revisar CVEs del mes\",\"instructions\":\"Solo críticos y altos\",\"taskId\":\"$AGENT_TASK_ID\"}")"
+DELEGATION_ID="$(printf '%s' "$delegation" | jget delegation.id)"
+[ -n "$DELEGATION_ID" ] && ok "delegación creada desde la UI" || bad "no se creó la delegación"
+
+queue="$(auth_api "$BASE/api/v1/queue")"
+[ "$(printf '%s' "$queue" | jget delegations.0.id)" = "$DELEGATION_ID" ] \
+  && ok "la delegación aparece en la cola del agente" || bad "la cola no incluye la delegación"
+[ "$(printf '%s' "$queue" | jget tasks.0.id)" = "$AGENT_TASK_ID" ] \
+  && ok "la tarea asignada aparece en la cola" || bad "falta la tarea en la cola"
+
+# Un run: abrir, registrar, adjuntar y cerrar.
+run="$(auth_api -X POST "$BASE/api/v1/runs" -H 'Content-Type: application/json' \
+  -d "{\"delegationId\":\"$DELEGATION_ID\",\"taskId\":\"$AGENT_TASK_ID\",\"status\":\"running\",\"input\":{\"rango\":\"último mes\"}}")"
+RUN_ID="$(printf '%s' "$run" | jget run.id)"
+[ -n "$RUN_ID" ] && ok "el agente abre un run" || bad "no se creó el run"
+[ -n "$(printf '%s' "$run" | jget run.startedAt)" ] && ok "el run arranca con startedAt" || bad "falta startedAt"
+
+[ "$(curl -fsS -b "$JAR" "$BASE/api/delegations/$DELEGATION_ID" | jget delegation.status)" = "in_progress" ] \
+  && ok "abrir el run pone la delegación en curso" || bad "la delegación no siguió al run"
+
+[ "$(auth_api -X PATCH "$BASE/api/v1/delegations/$DELEGATION_ID" -H 'Content-Type: application/json' \
+  -d '{"status":"in_progress","note":"Revisando inventario"}' | jget delegation.status)" = "in_progress" ] \
+  && ok "el agente actualiza el estado de la delegación" || bad "no se pudo actualizar la delegación"
+
+batch="$(auth_api -X POST "$BASE/api/v1/runs/$RUN_ID/logs" -H 'Content-Type: application/json' \
+  -d '{"logs":[{"level":"info","message":"Consultando inventario"},{"level":"warn","message":"3 hosts sin parchear"}]}')"
+[ "$(printf '%s' "$batch" | jget logs.1.level)" = "warn" ] \
+  && ok "el agente envía logs en lote" || bad "los logs en lote fallaron"
+
+single="$(auth_api -X POST "$BASE/api/v1/runs/$RUN_ID/logs" -H 'Content-Type: application/json' \
+  -d '{"message":"Informe listo"}')"
+[ "$(printf '%s' "$single" | jget logs.0.level)" = "info" ] \
+  && ok "una línea suelta también se acepta" || bad "la línea suelta falló"
+
+text_artifact="$(auth_api -X POST "$BASE/api/v1/runs/$RUN_ID/artifacts" -H 'Content-Type: application/json' \
+  -d '{"name":"resumen.md","kind":"text","content":"# Resumen\n- 3 hosts sin parchear"}')"
+TEXT_ARTIFACT_ID="$(printf '%s' "$text_artifact" | jget artifact.id)"
+[ "$(printf '%s' "$text_artifact" | jget artifact.kind)" = "text" ] \
+  && ok "artefacto de texto adjuntado" || bad "el artefacto de texto falló"
+
+file_artifact="$(auth_api -X POST "$BASE/api/v1/runs/$RUN_ID/artifacts" -H 'Content-Type: application/json' \
+  -d "{\"name\":\"detalle.txt\",\"kind\":\"file\",\"mimeType\":\"text/plain\",\"contentBase64\":\"$(printf 'contenido de prueba' | base64)\"}")"
+FILE_ARTIFACT_ID="$(printf '%s' "$file_artifact" | jget artifact.id)"
+[ "$(printf '%s' "$file_artifact" | jget artifact.downloadUrl)" = "/api/artifacts/$FILE_ARTIFACT_ID" ] \
+  && ok "artefacto de fichero con URL de descarga" || bad "el artefacto de fichero falló"
+[ "$(curl -fsS -b "$JAR" "$BASE/api/artifacts/$FILE_ARTIFACT_ID")" = "contenido de prueba" ] \
+  && ok "el fichero se descarga con la sesión del humano" || bad "no se pudo descargar el artefacto"
+[ "$(curl -fsS "$BASE/api/artifacts/$FILE_ARTIFACT_ID" 2>/dev/null || true)" = "# Resumen" ] \
+  && bad "un artefacto se descargó sin autenticar" \
+  || ok "sin sesión ni token, el artefacto no se entrega"
+
+closed="$(auth_api -X PATCH "$BASE/api/v1/runs/$RUN_ID" -H 'Content-Type: application/json' \
+  -d '{"status":"succeeded","output":"3 hosts sin parchear"}')"
+[ "$(printf '%s' "$closed" | jget run.status)" = "succeeded" ] && ok "el run se cierra" || bad "no se cerró el run"
+[ -n "$(printf '%s' "$closed" | jget run.durationMs)" ] && ok "el servidor calcula la duración" || bad "falta durationMs"
+[ -n "$(printf '%s' "$closed" | jget run.finishedAt)" ] && ok "y sella finishedAt" || bad "falta finishedAt"
+
+detail="$(auth_api "$BASE/api/v1/runs/$RUN_ID")"
+[ "$(printf '%s' "$detail" | jget logs.2.message)" = "Informe listo" ] \
+  && ok "el detalle trae los 3 logs en orden" || bad "los logs no están completos"
+[ "$(printf '%s' "$detail" | jget artifacts.1.name)" = "detalle.txt" ] \
+  && ok "y los 2 artefactos" || bad "faltan artefactos en el detalle"
+
+[ "$(curl -fsS -b "$JAR" "$BASE/api/delegations/$DELEGATION_ID" | jget delegation.status)" = "completed" ] \
+  && ok "cerrar el run completa la delegación" || bad "la delegación no siguió al run"
+
+# Aislamiento entre agentes.
+other="$(curl -fsS -b "$JAR" -X POST "$BASE/api/agents" -H 'Content-Type: application/json' \
+  -d '{"name":"Agente vecino de humo"}')"
+OTHER_AGENT_ID="$(printf '%s' "$other" | jget agent.id)"
+other_token="$(curl -fsS -b "$JAR" -X POST "$BASE/api/agents/$OTHER_AGENT_ID/tokens" -H 'Content-Type: application/json' \
+  -d '{"name":"humo","scopes":["runs:read","runs:write","tasks:read","delegations:read"]}')"
+OTHER_TOKEN="$(printf '%s' "$other_token" | jget secret)"
+
+[ "$(status -H "Authorization: Bearer $OTHER_TOKEN" "$BASE/api/v1/runs/$RUN_ID")" = "403" ] \
+  && ok "un agente no ve los runs de otro" || bad "los runs no están aislados por agente"
+[ "$(status -H "Authorization: Bearer $OTHER_TOKEN" "$BASE/api/v1/queue")" = "200" ] \
+  && ok "pero sí ve su propia cola" || bad "el otro agente no puede leer su cola"
+
+# Server-Sent Events: saluda y mantiene el canal abierto.
+sse_agent="$(curl -s --max-time 2 -H "Authorization: Bearer $AGENT_TOKEN" "$BASE/api/v1/events" || true)"
+printf '%s' "$sse_agent" | grep -q 'event: hello' \
+  && ok "/api/v1/events abre un flujo SSE" || bad "el SSE del agente no saludó"
+
+sse_ui="$(curl -s --max-time 2 -b "$JAR" "$BASE/api/events" || true)"
+printf '%s' "$sse_ui" | grep -q 'event: hello' \
+  && ok "/api/events abre un flujo SSE para la UI" || bad "el SSE de la UI no saludó"
+
+# Revocar un token lo invalida al instante.
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/tokens/$TOKEN_ID" > /dev/null
+[ "$(status -H "Authorization: Bearer $AGENT_TOKEN" "$BASE/api/v1/me")" = "401" ] \
+  && ok "un token revocado deja de autenticar" || bad "el token revocado sigue valiendo"
+
+# ---------------------------------------------------------------------------
+step "11. Limpieza"
 # ---------------------------------------------------------------------------
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$SUBTASK_ID" > /dev/null && ok "subtarea eliminada"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$TASK_ID" > /dev/null && ok "tarea eliminada"
@@ -375,6 +527,9 @@ curl -fsS -b "$JAR" -X DELETE "$BASE/api/labels/$CAPTURED_LABEL_ID" > /dev/null 
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/notes/$NOTE_A_ID" > /dev/null && ok "nota A eliminada"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/notes/$NOTE_B_ID" > /dev/null && ok "nota B eliminada"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/notes/$IMPORTED_ID" > /dev/null && ok "nota importada eliminada"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$AGENT_TASK_ID" > /dev/null && ok "tarea del agente eliminada"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/agents/$AGENT_ID" > /dev/null && ok "agente eliminado (con sus runs y delegaciones)"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/agents/$OTHER_AGENT_ID" > /dev/null && ok "agente vecino eliminado"
 
 # ---------------------------------------------------------------------------
 printf '\n\033[1mResultado:\033[0m %d correctas, %d fallidas\n' "$PASS" "$FAIL"
