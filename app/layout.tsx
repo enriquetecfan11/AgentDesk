@@ -1,24 +1,34 @@
-import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
-import './globals.css';
-import { AppShell } from '@/components/shell/app-shell';
+import type { Metadata, Viewport } from 'next';
 
-const inter = Inter({ subsets: ['latin'] });
+import { ThemeProvider } from '@/components/theme-provider';
+import { Toaster } from '@/components/ui/sonner';
+
+import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Operative — Workspace humano + agentes',
-  description: 'Workspace operativo personal: tareas, proyectos, notas, agentes y trazabilidad.',
+  title: 'AgentDesk',
+  description: 'Workspace operativo para una persona y sus agentes de IA',
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 5,
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="es" className="dark" suppressHydrationWarning>
-      <body className={inter.className}>
-        <AppShell>{children}</AppShell>
+    <html lang="es" suppressHydrationWarning>
+      <body className="min-h-dvh bg-background font-sans text-foreground antialiased">
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="system"
+          enableSystem
+          disableTransitionOnChange
+        >
+          {children}
+          <Toaster position="bottom-right" />
+        </ThemeProvider>
       </body>
     </html>
   );

@@ -1,214 +1,289 @@
-# Operative — deployment
+# AgentDesk
 
-Next.js frontend on Vercel, database and Edge Functions on Supabase.
+Workspace operativo self-hosted para **una persona y sus agentes de IA**.
 
-## Prerequisites
+Combina lo que aportan herramientas distintas —issues con estados y prioridades (Linear),
+captura rápida en lenguaje natural (Todoist), notas en markdown enlazables (Notion) y tablero
+Kanban (Trello)— y añade lo que ninguna de ellas tiene: **los agentes de IA son ciudadanos de
+primera clase**. Pueden tener tareas asignadas, crear tareas, escribir notas y dejar registro
+de sus ejecuciones.
 
-- Node 20 LTS (the app builds on newer versions too, but 20 is what CI should pin)
-- A Supabase project
-- A Vercel account
-- The [Supabase CLI](https://supabase.com/docs/guides/cli) for migrations and functions
+Todo corre en tu propia máquina. Sin servicios externos, sin cuentas, sin telemetría.
+
+---
+
+## Índice
+
+- [Estado del proyecto](#estado-del-proyecto)
+- [Arquitectura](#arquitectura)
+- [Requisitos](#requisitos)
+- [Instalación](#instalación)
+- [Variables de entorno](#variables-de-entorno)
+- [Cómo crear el primer usuario](#cómo-crear-el-primer-usuario)
+- [Comprobar que funciona](#comprobar-que-funciona)
+- [Desarrollo](#desarrollo)
+- [Base de datos y migraciones](#base-de-datos-y-migraciones)
+- [Estructura del repositorio](#estructura-del-repositorio)
+
+---
+
+## Estado del proyecto
+
+| Fase | Contenido | Estado |
+|---|---|---|
+| 1 | Esqueleto: repo, Dockerfile multi-arch, compose, Postgres, migraciones, healthchecks | ✅ |
+| 2 | Auth + layout + proyectos + tareas (lista y Kanban) | ⏳ |
+| 3 | Inbox, Today, Upcoming, captura rápida, recurrencias, paleta de comandos | ⏳ |
+| 4 | Notas con backlinks e import/export markdown | ⏳ |
+| 5 | Agentes, tokens, API REST v1, delegaciones, runs, SSE | ⏳ |
+| 6 | Webhooks, OpenAPI, servidor MCP | ⏳ |
+| 7 | Backup/restore y guía de migración Mac mini → Proxmox | ⏳ |
+| 8 | Tests, accesibilidad, rendimiento, README final | ⏳ |
+
+---
+
+## Arquitectura
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Tu LAN / Tailscale                                          │
+│                                                              │
+│   navegador ──┐        n8n / agentes ──┐                     │
+│               │                        │                     │
+│               ▼                        ▼                     │
+│        ┌────────────────────────────────────────┐            │
+│        │  contenedor "app"  (Next.js 16)        │            │
+│        │  · UI + Route Handlers                 │            │
+│        │  · /api/health                         │            │
+│        │  · /api/v1/**  (token de agente)       │            │
+│        │  · /api/events (SSE)                   │            │
+│        └────────────────┬───────────────────────┘            │
+│                         │  host: "db"                        │
+│                         ▼                                    │
+│        ┌────────────────────────────────────────┐            │
+│        │  contenedor "db"  (Postgres 16)        │            │
+│        │  volumen: pgdata                       │            │
+│        └────────────────────────────────────────┘            │
+│                                                              │
+│        volumen: uploads  ← artefactos de los runs            │
+└──────────────────────────────────────────────────────────────┘
+```
+
+Decisiones de diseño relevantes:
+
+- **El mismo `docker-compose.yml` sirve en el Mac mini (arm64) y en Proxmox (amd64).**
+  Las imágenes se construyen en local con `docker compose build`, así que no hacen falta
+  registries ni compilación cruzada. Nada en el repositorio depende de macOS.
+- **Nunca `localhost` en configuración.** Entre contenedores se usan nombres de servicio
+  (`db`); de cara al navegador se usa `APP_BASE_URL`.
+- **Los datos viven en volúmenes con nombre** (`pgdata`, `uploads`) para poder moverlos de
+  una máquina a otra con un `.tar.gz`.
+
+---
+
+## Requisitos
+
+- **Docker** con Compose v2 (Docker Desktop u OrbStack en macOS, Docker Engine en Linux).
+- Opcional, solo para desarrollo sin contenedores: **Node.js 22+**.
+
+No hace falta Node instalado para desplegar: todo corre dentro de los contenedores.
+
+---
+
+## Instalación
 
 ```bash
+git clone <url-del-repo> agentdesk
+cd agentdesk
+
+cp .env.example .env
+# Edita .env: como mínimo APP_BASE_URL y POSTGRES_PASSWORD
+
+docker compose up -d --build
+```
+
+La primera vez tarda unos minutos porque compila la imagen. Las migraciones se aplican
+automáticamente al arrancar (el `entrypoint` del contenedor las ejecuta antes de levantar
+el servidor).
+
+Para ver qué está pasando:
+
+```bash
+docker compose logs -f app
+```
+
+---
+
+## Variables de entorno
+
+Todas viven en `.env` (nunca se commitea; `.env.example` está documentado y sí se commitea).
+
+| Variable | Por defecto | Descripción |
+|---|---|---|
+| `APP_BASE_URL` | — | **Obligatoria.** URL tal como la escribe el navegador, p. ej. `http://192.168.1.50:3000`. Se usa para enlaces, cookies y CORS. No debe contener `localhost`. |
+| `HOST_BIND` | `0.0.0.0` | Interfaz del host donde se publica el puerto. `0.0.0.0` = toda la LAN. |
+| `APP_PORT` | `3000` | Puerto del host. El contenedor escucha siempre en `3000`. |
+| `POSTGRES_USER` | `agentdesk` | Usuario de Postgres. |
+| `POSTGRES_PASSWORD` | — | **Obligatoria.** Usa solo caracteres seguros para URL: `A-Z a-z 0-9 . _ ~ -`. |
+| `POSTGRES_DB` | `agentdesk` | Nombre de la base de datos. |
+| `DATABASE_URL` | — | Conexión usada por la app. Compose la construye a partir de `POSTGRES_*` con host `db`. |
+| `UPLOADS_DIR` | `/app/uploads` | Directorio de artefactos dentro del contenedor (volumen `uploads`). |
+
+### Sobre `APP_BASE_URL`
+
+Es la variable que más problemas causa si se pone mal:
+
+- Si empieza por `https://`, la cookie de sesión se marca `Secure`. Si empieza por `http://`,
+  no. Si declaras `https://` pero sirves por `http://`, el navegador descartará la cookie y
+  parecerá que el login no funciona.
+- Se usa para construir enlaces absolutos y como origen permitido en CORS.
+- **Nunca `localhost`**: desde otro dispositivo de la LAN, `localhost` apunta a ese
+  dispositivo, no al servidor.
+
+Si tu IP cambia, actualiza `APP_BASE_URL` y reinicia: `docker compose up -d`.
+
+---
+
+## Cómo crear el primer usuario
+
+La aplicación arranca **sin usuarios**. La primera vez que entres:
+
+1. Abre `APP_BASE_URL` en el navegador.
+2. Serás redirigido a `/setup`.
+3. Elige email y contraseña. La contraseña debe tener **al menos 12 caracteres**.
+4. Al crearse el primer usuario, `/setup` queda deshabilitado para siempre (devuelve `409`).
+
+> Esta pantalla se implementa en la **Fase 2**. Hasta entonces, la raíz muestra una página de
+> estado con la URL base y la conectividad con la base de datos.
+
+---
+
+## Comprobar que funciona
+
+```bash
+./scripts/verify.sh
+```
+
+El script lee `APP_BASE_URL` de `.env`, consulta `/api/health` y comprueba que la raíz
+renderiza. Salida esperada:
+
+```
+→ APP_BASE_URL = http://192.168.1.177:3000
+→ GET http://192.168.1.177:3000/api/health
+  {"status":"ok","services":{"app":"ok","db":"ok"},...}
+✓ Instalación operativa en http://192.168.1.177:3000
+```
+
+La prueba de verdad es abrir `APP_BASE_URL` **desde otro dispositivo de la LAN** (el móvil,
+otro portátil). Si eso funciona, `HOST_BIND` y el firewall están bien.
+
+También puedes comprobar el healthcheck de Docker:
+
+```bash
+docker compose ps          # la columna STATUS debe decir (healthy) en ambos servicios
+```
+
+---
+
+## Desarrollo
+
+### Todo dentro de contenedores
+
+Es el flujo que reproduce producción:
+
+```bash
+docker compose up -d --build
+docker compose logs -f app
+```
+
+### Con recarga en caliente en el host
+
+Levanta solo la base de datos y ejecuta Next en tu máquina:
+
+```bash
+docker compose up -d db
+
+# DATABASE_URL apuntando al puerto publicado de Postgres.
+# Es la única excepción a la regla de "nunca localhost": fuera de Docker no hay
+# red de servicios, y solo aplica al desarrollo en tu propia máquina.
+export DATABASE_URL="postgresql://agentdesk:<password>@127.0.0.1:5432/agentdesk"
+export APP_BASE_URL="http://127.0.0.1:3000"
+
 npm install
-npm install -g supabase
+npm run dev
 ```
 
-## Environment variables
-
-Copy `.env.example` to `.env.local` and fill it in. The three variables below are the only
-ones the app and the Edge Functions need.
-
-| Variable | Scope | Required by | Notes |
-|---|---|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | public | browser bundle | `https://<ref>.supabase.co` |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | public | browser bundle | The anon key. Safe to expose; RLS is the control. |
-| `SUPABASE_SERVICE_ROLE_KEY` | **secret** | `app/api/**` only | Bypasses RLS. Never expose it. |
-
-Anything prefixed `NEXT_PUBLIC_` is inlined into the browser bundle. Never put a secret in
-a `NEXT_PUBLIC_` name.
-
-`SUPABASE_SERVICE_ROLE_KEY` is read only by the four route handlers in `app/api/agents/**`
-and `app/api/automations/**`. `lib/agents-server.ts` declares `import 'server-only'`, so the
-build fails loudly if that module is ever pulled into a client component.
-
-The `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF` and `SUPABASE_DB_PASSWORD` entries in
-`.env.example` are for the Supabase CLI only. The CLI reads them from your shell or from
-`.env.local`; they are not needed by Vercel.
-
-Generate the service role key from the CLI:
+Comandos útiles:
 
 ```bash
-supabase projects api-keys --project-ref <project-ref>
+npm run typecheck     # tsc --noEmit
+npm test              # Vitest
+npm run db:generate   # genera una migración a partir de lib/db/schema.ts
+npm run db:migrate    # aplica migraciones pendientes
+npm run db:reset      # DESTRUCTIVO: borra el esquema y reaplica todo
 ```
 
-## Database
+---
+
+## Base de datos y migraciones
+
+- **Postgres 16**, servido por el contenedor `db`.
+- **Drizzle ORM** con migraciones versionadas en `drizzle/`. Se commitean siempre.
+- El esquema vive en `lib/db/schema.ts` y es la única fuente de verdad.
+
+Flujo al cambiar el modelo de datos:
 
 ```bash
-supabase login
-supabase link --project-ref <project-ref>
-supabase db push
+# 1. Edita lib/db/schema.ts
+# 2. Genera la migración
+DATABASE_URL="postgresql://agentdesk:<password>@127.0.0.1:5432/agentdesk" npm run db:generate
+# 3. Aplícala (en Docker se aplica sola al reiniciar el contenedor)
+docker compose up -d --build
 ```
 
-`supabase db push` applies every migration in `supabase/migrations/` that is not yet on the
-remote database, in filename order. There are four:
+`drizzle-kit` solo se usa desde el host. La imagen de producción no lo incluye: el
+`entrypoint` ejecuta un runner de migraciones precompilado (`migrate.mjs`).
 
-| Migration | Purpose |
+Tablas creadas por la migración inicial (`drizzle/0000_init.sql`):
+
+| Área | Tablas |
 |---|---|
-| `20261018092244_create_workspace_schema.sql` | 13 tables, indexes, RLS enabled, realtime |
-| `20261018094500_harden_functions_search_path.sql` | Pins `search_path` on the trigger functions |
-| `20261018120000_restrict_anon_privileges.sql` | Removes anon write access to `agents` / `automations`, protects the credential hashes |
-| `20261018120100_index_credential_lookup.sql` | Indexes `token_hash` and `secret_hash` |
+| Identidad | `users`, `sessions` |
+| Trabajo | `projects`, `labels`, `tasks`, `task_labels` |
+| Notas | `notes`, `note_links` |
+| Agentes | `agents`, `delegations`, `runs`, `run_logs`, `artifacts` |
+| Conocimiento | `decisions` |
+| Credenciales | `api_tokens` |
+| Operación | `activity_log`, `saved_views`, `webhooks` |
 
-Apply them before the first deploy. The Edge Functions authenticate against
-`agents.token_hash`, so the app is non-functional until `db push` has run.
+---
 
-Verify remotely without touching it:
+## Estructura del repositorio
 
-```bash
-supabase db diff --linked --schema public
+```
+app/                  Rutas de Next.js (App Router)
+  api/health/         Healthcheck
+  layout.tsx          Layout raíz (tema claro/oscuro)
+components/
+  ui/                 Primitivas estilo shadcn/ui (Radix + Tailwind)
+docker/
+  entrypoint.sh       Aplica migraciones y arranca el servidor
+drizzle/              Migraciones SQL versionadas (se commitean)
+lib/
+  db/
+    schema.ts         Esquema Drizzle — fuente de verdad del modelo
+    client.ts         Pool de Postgres (perezoso)
+  env.ts              Validación de variables de entorno con Zod
+scripts/
+  migrate.ts          Runner de migraciones (se empaqueta en la imagen)
+  reset-db.ts         Reinicio destructivo para desarrollo
+  verify.sh           Comprobación de extremo a extremo
+Dockerfile            Build multi-stage, multi-arquitectura
+docker-compose.yml    App + Postgres (el mismo en Mac mini y Proxmox)
 ```
 
-## Edge Functions
+---
 
-```bash
-supabase functions deploy agent-api
-supabase functions deploy mcp-gateway
-supabase functions deploy n8n-ingest
-```
+## Licencia
 
-`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected by the platform automatically.
-Nothing else is needed in their environment.
-
-All three functions have `verify_jwt = false` in `supabase/config.toml`. That is deliberate:
-they authenticate with per-agent bearer tokens (`Authorization: Bearer agt_...` for
-`agent-api` and `mcp-gateway`, `X-N8N-Secret` for `n8n-ingest`) rather than with Supabase
-Auth. Do not "fix" this by turning `verify_jwt` on without also adding a real auth scheme.
-
-### Checking the functions
-
-```bash
-# identity, with an agent token
-curl https://<ref>.supabase.co/functions/v1/agent-api \
-  -H "Authorization: Bearer agt_..."
-
-# MCP initialize
-curl https://<ref>.supabase.co/functions/v1/mcp-gateway \
-  -H "Authorization: Bearer agt_..." \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}'
-```
-
-### Type checking the functions
-
-`tsconfig.json` excludes `supabase/functions`, because the Edge Functions run on Deno and
-`tsc` does not know the `Deno` global. `npm run typecheck` therefore does **not** cover
-them. Check them with Deno instead:
-
-```bash
-deno check supabase/functions/agent-api/index.ts
-deno check supabase/functions/mcp-gateway/index.ts
-deno check supabase/functions/n8n-ingest/index.ts
-```
-
-All three pass. Note that two latent type errors in the Edge Functions were only ever
-visible this way; keep running these checks after touching them.
-
-## Vercel
-
-1. Import the repository at [vercel.com/new](https://vercel.com/new).
-2. Framework preset: **Next.js**. Build command `npm run build`, output `.next` — all
-   defaults, nothing to override.
-3. Add the three environment variables under **Settings → Environment Variables**, for all
-   three environments (Production, Preview, Development).
-4. Deploy.
-
-There is no `vercel.json` and none is needed. The app is a standard App Router project with
-no rewrites, no middleware and no custom headers.
-
-`npm run lint` is no longer skipped during builds, so a lint error will fail the deployment.
-`npm run build` and `npm run lint` both pass on a clean checkout.
-
-## Supabase Auth redirect URLs
-
-The app has no sign-in, so nothing in it needs a redirect today. Configure these anyway under
-**Authentication → URL Configuration** before you add auth, otherwise a future login flow
-will silently fail:
-
-- **Site URL**: `https://<your-domain>.vercel.app`
-- **Redirect URLs**: `https://<your-domain>.vercel.app/**`
-
-Avoid wildcards in production. List explicit paths, for example
-`https://<your-domain>.vercel.app/auth/callback`.
-
-## Security model
-
-Read this before exposing the deployment publicly.
-
-### What is protected
-
-- Agent tokens and n8n secrets are generated with `crypto.getRandomValues` (192 and 160 bits
-  of entropy), stored **only** as a sha256 hash, and returned to the UI exactly once at
-  creation. There is no endpoint that can read a token back.
-- `agents` and `automations` are not writable by the `anon` role, and `token_hash` /
-  `secret_hash` are not readable by it either. An attacker holding only the browser's anon
-  key cannot forge an agent credential.
-- Agent credentials are scoped per agent: a task is only visible to an agent that has been
-  delegated it, and `run_id` references must belong to that agent's own runs.
-- Every Edge Function validates its input, length-caps free text, and returns opaque errors
-  rather than database messages.
-
-### What is NOT protected — residual risk
-
-**The anon key still grants full read and write access to all business data.** There is no
-sign-in. `tasks`, `projects`, `notes`, `delegations`, `runs`, `artifacts`, `decisions`,
-`actors` and `automations_log` all keep `USING (true)` policies for the `anon` role, and
-`events` can be inserted.
-
-The anon key is public: it ships in the browser bundle. Anyone who obtains it can read the
-entire workspace, delete every task and project, and write false entries into the timeline.
-The credential forgery path that existed before migration `20261018120000` is closed, but
-data integrity and confidentiality are not.
-
-This is acceptable for a private deployment. It is **not** acceptable for a public URL.
-Two mitigations, in increasing order of effort:
-
-1. Keep the deployment private. On Vercel, enable **Deployment Protection** under Settings →
-   Protection so only your team can load the app. This does not fix the anon key, but it
-   means nobody else can reach the page to extract it.
-2. Add Supabase Auth and scope the RLS policies to `auth.uid()`. This is the only change
-   that actually closes the gap. The policy loop in
-   `20261018092244_create_workspace_schema.sql` is the place to do it, and
-   `lib/supabase.ts` is where the client would start persisting a session.
-
-### Known outstanding issue: Next.js is out of date
-
-`next` is pinned at `13.5.1` and `npm audit` reports **33 advisories against it, including
-two unauthenticated remote code execution CVEs**, with no automatic fix available — the
-upgrade target is past 15.5.23.
-
-Most of those advisories target features this app does not use, which reduces the practical
-exposure but does not eliminate it:
-
-| Advisory class | Applies here? |
-|---|---|
-| Image Optimization RCE / cache issues | No — there is no `next/image` usage anywhere |
-| Middleware authorization bypass | No — there is no `middleware.ts` |
-| Server Actions SSRF / DoS | No — the app uses Route Handlers, not Server Actions |
-| Rewrites request smuggling / SSRF | No — no rewrites are configured |
-| Unauthenticated RCE on Windows hosts | No — deploying to Vercel, which is Linux |
-| Cache poisoning / response cache confusion | **Partly** — applies to App Router responses generally |
-
-Upgrading Next 13 → 15 is a major migration, not a version bump: React 18 → 19, async
-request APIs, and a new ESLint major. It was left out of this pass deliberately, because it
-is a framework upgrade rather than a deployment fix. Treat it as the next piece of work
-before this app faces the public internet.
-
-## Routine commands
-
-```bash
-npm run dev            # local dev server
-npm run build          # production build
-npm run lint           # eslint (now enforced during build)
-npm run typecheck      # tsc --noEmit; does not cover supabase/functions
-```
+Privado. Sin licencia pública.

@@ -1,0 +1,16 @@
+node_modules
+.next
+.git
+.gitignore
+.github
+.env
+.env.*
+!.env.example
+Dockerfile
+docker-compose*.yml
+README.md
+uploads
+coverage
+*.md
+migrate.mjs
+tsconfig.tsbuildinfo
