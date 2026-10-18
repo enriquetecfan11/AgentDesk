@@ -254,13 +254,114 @@ project_json="$(curl -fsS -b "$JAR" "$BASE/api/search?q=Smoke")"
 # ---------------------------------------------------------------------------
 step "8. Páginas nuevas"
 # ---------------------------------------------------------------------------
-for route in /inbox /today /upcoming; do
+for route in /inbox /today /upcoming /notes; do
   http="$(status -b "$JAR" "$BASE$route")"
   [ "$http" = "200" ] && ok "$route responde 200" || bad "$route responde $http"
 done
 
 # ---------------------------------------------------------------------------
-step "9. Limpieza"
+step "9. Notas, enlaces y vault"
+# ---------------------------------------------------------------------------
+# Dos notas que se enlazan: la resolución de [[enlaces]] vive en el servidor.
+note_a="$(curl -fsS -b "$JAR" -X POST "$BASE/api/notes" -H 'Content-Type: application/json' \
+  -d '{"title":"Nota de humo A","contentMd":"# A\n\nver [[Nota de humo B]] y [un enlace](https://x.dev)"}')"
+NOTE_A_ID="$(printf '%s' "$note_a" | jget note.id)"
+
+note_b="$(curl -fsS -b "$JAR" -X POST "$BASE/api/notes" -H 'Content-Type: application/json' \
+  -d '{"title":"Nota de humo B","contentMd":"**negrita** y `código`"}')"
+NOTE_B_ID="$(printf '%s' "$note_b" | jget note.id)"
+
+[ -n "$NOTE_A_ID" ] && [ -n "$NOTE_B_ID" ] && ok "se crean dos notas" || bad "no se crearon"
+
+detail_a="$(curl -fsS -b "$JAR" "$BASE/api/notes/$NOTE_A_ID")"
+[ "$(printf '%s' "$detail_a" | jget outgoing.0.note.id)" = "$NOTE_B_ID" ] \
+  && ok "[[enlace]] resuelto a la nota existente" || bad "el enlace no se resolvió"
+
+detail_b="$(curl -fsS -b "$JAR" "$BASE/api/notes/$NOTE_B_ID")"
+[ "$(printf '%s' "$detail_b" | jget backlinks.0.id)" = "$NOTE_A_ID" ] \
+  && ok "backlink calculado en la nota destino" || bad "no hay backlink"
+
+[ "$(curl -fsS -b "$JAR" "$BASE/api/notes?q=Nota%20de%20humo%20A" | jget notes.0.title)" = "Nota de humo A" ] \
+  && ok "la búsqueda de notas encuentra por título" || bad "la búsqueda de notas falló"
+
+# Renombrar reconstruye el grafo: el título antiguo deja de existir.
+curl -fsS -b "$JAR" -X PATCH "$BASE/api/notes/$NOTE_B_ID" -H 'Content-Type: application/json' \
+  -d '{"title":"Nota de humo B renombrada"}' > /dev/null
+[ "$(curl -fsS -b "$JAR" "$BASE/api/notes/$NOTE_A_ID" | jget outgoing.0.note)" = "" ] \
+  && ok "tras renombrar, el enlace queda sin destino" || bad "el enlace apunta a algo inexistente"
+[ "$(curl -fsS -b "$JAR" "$BASE/api/notes/$NOTE_B_ID" | jget backlinks.0.id)" = "" ] \
+  && ok "y el backlink desaparece" || bad "el backlink sobrevivió al renombrado"
+
+# El título es la identidad: no puede repetirse.
+code="$(status -b "$JAR" -X POST "$BASE/api/notes" -H 'Content-Type: application/json' \
+  -d '{"title":"Nota de humo A"}')"
+[ "$code" = "409" ] && ok "título duplicado → 409" || bad "título duplicado → $code (esperado 409)"
+
+# Importar un .md con frontmatter, sin pisar lo existente.
+import_body='{"files":[{"name":"Importada.md","content":"---\ntitle: Importada de Obsidian\ntags: [seguridad]\n---\n\nver [[Nota de humo A]]"}],"overwrite":false}'
+import_1="$(curl -fsS -b "$JAR" -X POST "$BASE/api/notes/import" -H 'Content-Type: application/json' -d "$import_body")"
+[ "$(printf '%s' "$import_1" | jget created)" = "1" ] \
+  && ok "importar: 1 nota creada desde frontmatter" || bad "la importación no creó nada"
+IMPORTED_ID="$(curl -fsS -b "$JAR" "$BASE/api/notes?q=Importada%20de%20Obsidian" | jget notes.0.id)"
+
+import_2="$(curl -fsS -b "$JAR" -X POST "$BASE/api/notes/import" -H 'Content-Type: application/json' -d "$import_body")"
+[ "$(printf '%s' "$import_2" | jget skipped)" = "1" ] \
+  && ok "importar dos veces: se omite la existente" || bad "no se omitió la nota existente"
+
+import_3="$(curl -fsS -b "$JAR" -X POST "$BASE/api/notes/import" -H 'Content-Type: application/json' \
+  -d "$(printf '%s' "$import_body" | sed 's/"overwrite":false/"overwrite":true/')")"
+[ "$(printf '%s' "$import_3" | jget updated)" = "1" ] \
+  && ok "importar con overwrite: se actualiza" || bad "no se actualizó la nota"
+
+# La nota importada enlaza con A, así que A tiene un backlink nuevo.
+[ "$(curl -fsS -b "$JAR" "$BASE/api/notes/$NOTE_A_ID" | jget backlinks.0.id)" = "$IMPORTED_ID" ] \
+  && ok "el backlink de la nota importada se calcula" || bad "falta el backlink de la importada"
+
+# Exportación: un ZIP real, que el sistema operativo pueda abrir.
+ZIP_DIR="$(mktemp -d)"
+curl -fsS -b "$JAR" "$BASE/api/notes/export" -o "$ZIP_DIR/vault.zip"
+[ "$(python3 -c "
+import sys
+data = open('$ZIP_DIR/vault.zip','rb').read()
+print('pk' if data[:2] == b'PK' else 'no')
+")" = "pk" ] && ok "la exportación es un ZIP" || bad "la exportación no es un ZIP"
+
+if command -v unzip > /dev/null 2>&1; then
+  listing="$(unzip -l "$ZIP_DIR/vault.zip" 2>/dev/null || true)"
+  printf '%s' "$listing" | grep -q "Nota de humo A.md" \
+    && ok "el ZIP contiene los .md con su título" || bad "el ZIP no contiene la nota esperada"
+  printf '%s' "$listing" | grep -q "Importada de Obsidian.md" \
+    && ok "el ZIP incluye la nota importada" || bad "falta la nota importada en el ZIP"
+else
+  ok "unzip no disponible: ZIP verificado solo por firma"
+fi
+
+# Y el .md exportado vuelve a reconocerse igual: reimportarlo no duplica nada.
+if command -v unzip > /dev/null 2>&1; then
+  unzip -o -q "$ZIP_DIR/vault.zip" "Nota de humo A.md" -d "$ZIP_DIR/out" 2>/dev/null || true
+
+  if [ -f "$ZIP_DIR/out/Nota de humo A.md" ]; then
+    roundtrip_body="$(python3 -c "
+import json
+content = open('$ZIP_DIR/out/Nota de humo A.md', encoding='utf-8').read()
+print(json.dumps({'files': [{'name': 'Copia de A.md', 'content': content}], 'overwrite': False}))
+")"
+    roundtrip="$(curl -fsS -b "$JAR" -X POST "$BASE/api/notes/import" \
+      -H 'Content-Type: application/json' -d "$roundtrip_body")"
+
+    # El frontmatter exportado conserva el título, así que se detecta como
+    # duplicado: es exactamente lo que se quiere al reimportar el vault.
+    [ "$(printf '%s' "$roundtrip" | jget skipped)" = "1" ] \
+      && ok "el .md exportado se reconoce al reimportar" || bad "el .md exportado no se reconoció"
+  else
+    bad "no se pudo extraer el .md del ZIP"
+  fi
+fi
+
+rm -rf "$ZIP_DIR"
+
+# ---------------------------------------------------------------------------
+step "10. Limpieza"
 # ---------------------------------------------------------------------------
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$SUBTASK_ID" > /dev/null && ok "subtarea eliminada"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$TASK_ID" > /dev/null && ok "tarea eliminada"
@@ -271,6 +372,9 @@ curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$PLAIN_ID" > /dev/null && ok "tar
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/projects/$PROJECT_ID" > /dev/null && ok "proyecto eliminado"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/labels/$LABEL_ID" > /dev/null && ok "etiqueta eliminada"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/labels/$CAPTURED_LABEL_ID" > /dev/null && ok "etiqueta de captura eliminada"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/notes/$NOTE_A_ID" > /dev/null && ok "nota A eliminada"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/notes/$NOTE_B_ID" > /dev/null && ok "nota B eliminada"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/notes/$IMPORTED_ID" > /dev/null && ok "nota importada eliminada"
 
 # ---------------------------------------------------------------------------
 printf '\n\033[1mResultado:\033[0m %d correctas, %d fallidas\n' "$PASS" "$FAIL"

@@ -80,3 +80,47 @@ export type ActivityDTO = {
   meta: Record<string, unknown> | null;
   createdAt: string;
 };
+
+// ---------------------------------------------------------------------------
+// Notes
+// ---------------------------------------------------------------------------
+
+export type NoteDTO = {
+  id: string;
+  title: string;
+  contentMd: string;
+  source: 'app' | 'obsidian';
+  projectId: string | null;
+  taskId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** Minimal reference used by the backlink and outgoing-link lists. */
+export type NoteRef = { id: string; title: string };
+
+export type NoteListItemDTO = {
+  id: string;
+  title: string;
+  /** Plain-text beginning of the note, for the list. */
+  excerpt: string;
+  projectId: string | null;
+  project: ProjectRef | null;
+  updatedAt: string;
+  createdAt: string;
+  /** Notes this one links to. */
+  outgoingCount: number;
+  /** Notes that link to this one. */
+  backlinkCount: number;
+};
+
+export type NoteDetailDTO = {
+  note: NoteDTO;
+  project: ProjectRef | null;
+  /** Notes pointing here. */
+  backlinks: NoteRef[];
+  /** Targets of this note's `[[links]]`; `note: null` means it does not exist yet. */
+  outgoing: { title: string; note: NoteRef | null }[];
+  /** Other notes sharing the same project, used as a plain "related" list. */
+  related: NoteRef[];
+};

@@ -34,7 +34,7 @@ Todo corre en tu propia máquina. Sin servicios externos, sin cuentas, sin telem
 | 1 | Esqueleto: repo, Dockerfile multi-arch, compose, Postgres, migraciones, healthchecks | ✅ |
 | 2 | Auth + layout + proyectos + tareas (lista y Kanban) | ✅ |
 | 3 | Inbox, Today, Upcoming, captura rápida, recurrencias, paleta de comandos | ✅ |
-| 4 | Notas con backlinks e import/export markdown | ⏳ |
+| 4 | Notas con backlinks e import/export markdown | ✅ |
 | 5 | Agentes, tokens, API REST v1, delegaciones, runs, SSE | ⏳ |
 | 6 | Webhooks, OpenAPI, servidor MCP | ⏳ |
 | 7 | Backup/restore y guía de migración Mac mini → Proxmox | ⏳ |
@@ -234,6 +234,10 @@ y `/api/health`. Los agentes usarán tokens Bearer en `/api/v1` (Fase 5).
 | `DELETE` | `/api/labels/:id` | Borrar una etiqueta |
 | `POST` | `/api/capture` | Una línea de lenguaje natural → una tarea |
 | `GET` | `/api/search?q=` | Tareas y proyectos para la paleta (mínimo 2 caracteres) |
+| `GET` `POST` | `/api/notes` | Listar / crear notas (`?q=` y `?projectId=` para filtrar) |
+| `GET` `PATCH` `DELETE` | `/api/notes/:id` | Nota con sus backlinks y enlaces salientes |
+| `POST` | `/api/notes/import` | Importar varios `.md` (`{ files: [{ name, content }], overwrite }`) |
+| `GET` | `/api/notes/export` | Descargar el vault completo en un `.zip` |
 
 Filtros de `GET /api/tasks`, todos opcionales:
 
@@ -328,6 +332,74 @@ crea la tarea con la misma gramática de la captura rápida.
 
 ---
 
+## Notas
+
+Markdown con enlaces entre notas, al estilo Obsidian. El **título es la identidad** de la nota:
+es lo que apuntan los `[[enlaces]]`, y por eso no puede repetirse (crear una nota con un título
+ya usado devuelve `409`).
+
+```markdown
+# Gestión de incidencias
+
+Ver también [[Procedimiento de guardia]] y el runbook de `wazuh`.
+
+- [x] Revisar alertas
+- [ ] Documentar el escalado
+```
+
+| Escribes | Se renderiza |
+|---|---|
+| `# … ######` | Encabezados |
+| `**negrita**`, `*cursiva*`, `~~tachado~~` | Énfasis |
+| `` `código` `` y bloques con ``` ``` ``` | Código |
+| `- item`, `1. item`, `- [x] hecho` | Listas y casillas |
+| `> cita`, `---` | Cita y separador |
+| `[texto](url)`, `![alt](imagen)` | Enlaces externos e imágenes |
+| `[[Otra nota]]`, `[[Otra nota\|ver]]`, `[[Otra nota#Parte]]` | Enlace interno |
+
+El Markdown se convierte a un árbol de nodos que se pinta como elementos de React. **No hay
+`dangerouslySetInnerHTML` en ninguna parte**: una nota no puede inyectar HTML, y el subconjunto
+admitido es el que se usa de verdad.
+
+### Enlaces y backlinks
+
+- El panel de la nota muestra **«Enlaza con»** (los `[[enlaces]]` de esta nota), **«Mencionada en»**
+  (las notas que apuntan aquí) y **«En el mismo proyecto»**.
+- Un enlace que todavía no tiene destino se pinta punteado y, al pulsarlo, crea la nota.
+- Al **renombrar** una nota se reconstruye el grafo entero de enlaces: lo que apuntaba al título
+  viejo deja de resolver, y lo que ya usaba el título nuevo empieza a resolver.
+- Al **guardar** una nota solo se recalculan sus enlaces, no los de todo el vault.
+- Al **crear** una nota sí se recalcula todo: puede ser justo el título al que otra nota llevaba
+  apuntando sin destino.
+
+### Importar y exportar
+
+- **Exportar** descarga `agentdesk-notas-<fecha>.zip` con un `.md` por nota, con frontmatter
+  (`title`, `tags`, `created`, `updated`). Descomprímelo en una carpeta y abre esa carpeta con
+  Obsidian: funciona tal cual.
+- **Importar** acepta varios `.md` a la vez (o todo el contenido de una carpeta). El título sale
+  del frontmatter, del nombre del fichero o del primer encabezado, por ese orden. Las claves de
+  frontmatter que no se usan se conservan.
+- Nada se borra nunca: si el título ya existe, la nota se **omite** y se cuenta como tal, salvo
+  que marques «sobrescribir». Reimportar tu propia exportación no duplica nada.
+
+```bash
+# Exportar el vault
+curl -s -b cookies.txt http://192.168.1.50:3000/api/notes/export -o vault.zip
+
+# Importar dos ficheros
+curl -s -b cookies.txt -X POST http://192.168.1.50:3000/api/notes/import \
+  -H 'Content-Type: application/json' \
+  -d '{"files":[{"name":"a.md","content":"# Nota A"},{"name":"b.md","content":"# Nota B"}],"overwrite":false}' | jq
+```
+
+El ZIP se escribe a mano (`lib/zip.ts`, método *store*, sin compresión) porque Node no trae
+ninguna biblioteca de ZIP y no merecía la pena añadir una dependencia para unos cientos de
+ficheros de texto. La importación, en cambio, no abre archivos: el navegador lee los `.md` y los
+envía como JSON, así que el servidor no tiene que descomprimir nada.
+
+---
+
 ## Pruebas
 
 ```bash
@@ -337,8 +409,11 @@ npm run typecheck     # tsc --noEmit, en modo estricto
 ```
 
 Las pruebas unitarias no tocan la base de datos: cubren lo que se puede equivocar sin
-infraestructura (parseo de fechas locales, filtros de la API, esquemas de validación).
-Todo lo que necesita Postgres se comprueba con `scripts/smoke.sh`.
+infraestructura (parseo de fechas locales, filtros de la API, esquemas de validación, la captura
+en lenguaje natural, el motor de recurrencias, el parser de Markdown, el frontmatter, los
+wikilinks y el escritor de ZIP).
+Todo lo que necesita Postgres se comprueba con `scripts/smoke.sh`, que ejercita la API de punta a
+punta contra la instalación en marcha.
 
 `npm test` es un `vitest run`: no se queda en modo vigilancia.
 
@@ -432,12 +507,14 @@ app/                  Rutas de Next.js (App Router)
   api/auth/           setup, login, logout, me
   api/capture/        Captura rápida en lenguaje natural
   api/search/         Búsqueda para la paleta de comandos
+  api/notes/          Notas, importación y exportación del vault
   api/projects/       CRUD de proyectos
   api/tasks/          CRUD de tareas y subtareas
   api/labels/         Etiquetas
 components/
   auth/               Formularios de login y setup
   capture/            Caja de captura con vista previa del análisis
+  notes/              Listado, editor, renderizador de Markdown y diálogo de importación
   projects/           Listado, diálogo y espacio de trabajo del proyecto
   shell/              Sidebar, topbar, navegación móvil, tema, paleta y atajos
   tasks/              Lista, tablero, secciones, calendario, panel de detalle, hook
@@ -457,7 +534,9 @@ lib/
   constants.ts        Metadatos de estados y prioridades (seguro en cliente)
   dates.ts            Fechas sin sustos de zona horaria
   events.ts           Señales entre componentes del shell
+  notes/              Markdown a nodos, frontmatter y wikilinks (puro, con tests)
   types.ts            Contratos JSON entre servidor y cliente
+  zip.ts              Escritor de ZIP mínimo, sin dependencias (puro, con tests)
   env.ts              Validación de variables de entorno con Zod
 scripts/
   migrate.ts          Runner de migraciones (se empaqueta en la imagen)

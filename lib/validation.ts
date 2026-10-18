@@ -156,6 +156,48 @@ export const captureSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Notes
+// ---------------------------------------------------------------------------
+
+export const NOTE_CONTENT_MAX = 200_000;
+
+export const noteCreateSchema = z.object({
+  title: z.string().trim().min(1, 'El título es obligatorio').max(200),
+  contentMd: z.string().max(NOTE_CONTENT_MAX).default(''),
+  projectId: z.uuid().nullish(),
+  taskId: z.uuid().nullish(),
+});
+
+export const noteUpdateSchema = z.object({
+  title: z.string().trim().min(1, 'El título es obligatorio').max(200).optional(),
+  contentMd: z.string().max(NOTE_CONTENT_MAX).optional(),
+  projectId: z.uuid().nullish(),
+  taskId: z.uuid().nullish(),
+});
+
+/**
+ * Import of a whole vault at once.
+ *
+ * The files travel as JSON rather than as a ZIP: the browser can read a
+ * multi-file selection with `FileReader` and the server stays free of an
+ * unzip implementation and of the decompression-bomb surface that comes
+ * with it.
+ */
+export const noteImportSchema = z.object({
+  files: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1).max(300),
+        content: z.string().max(NOTE_CONTENT_MAX),
+      }),
+    )
+    .min(1, 'Selecciona al menos un archivo .md')
+    .max(1000),
+  /** Existing notes with the same title are overwritten instead of skipped. */
+  overwrite: z.boolean().default(false),
+});
+
+// ---------------------------------------------------------------------------
 // Inferred input types
 // ---------------------------------------------------------------------------
 
@@ -167,5 +209,8 @@ export type TaskCreateInput = z.infer<typeof taskCreateSchema>;
 export type TaskUpdateInput = z.infer<typeof taskUpdateSchema>;
 export type LabelCreateInput = z.infer<typeof labelCreateSchema>;
 export type CaptureInput = z.infer<typeof captureSchema>;
+export type NoteCreateInput = z.infer<typeof noteCreateSchema>;
+export type NoteUpdateInput = z.infer<typeof noteUpdateSchema>;
+export type NoteImportInput = z.infer<typeof noteImportSchema>;
 
 export { taskStatusSchema as taskStatus, taskPrioritySchema as taskPriority };

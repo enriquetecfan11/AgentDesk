@@ -1,9 +1,10 @@
-import type { ActivityEntry, Label, Project, Task } from '@/lib/db/schema';
+import type { ActivityEntry, Label, Note, Project, Task } from '@/lib/db/schema';
 import type {
   ActivityDTO,
   LabelDTO,
   LabelRef,
   Milestone,
+  NoteDTO,
   ProjectDTO,
   ProjectRef,
   TaskDTO,
@@ -87,6 +88,19 @@ export function serializeProject(
 
 export function serializeLabel(label: Label, usage: number): LabelDTO {
   return { id: label.id, name: label.name, color: label.color, usage };
+}
+
+export function serializeNote(note: Note): NoteDTO {
+  return {
+    id: note.id,
+    title: note.title,
+    contentMd: note.contentMd,
+    source: note.source,
+    projectId: note.projectId,
+    taskId: note.taskId,
+    createdAt: iso(note.createdAt) ?? new Date(0).toISOString(),
+    updatedAt: iso(note.updatedAt) ?? new Date(0).toISOString(),
+  };
 }
 
 export function serializeActivity(entry: ActivityEntry): ActivityDTO {
