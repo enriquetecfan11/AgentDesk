@@ -116,7 +116,7 @@ export function UpcomingCalendar({
               aria-pressed={isSelected}
               aria-label={`${day.toLocaleDateString('es-ES', { dateStyle: 'full' })}, ${count} tareas`}
               className={cn(
-                'relative grid h-9 place-items-center rounded-md text-xs transition-colors',
+                'relative grid h-10 place-items-center rounded-md text-xs transition-colors sm:h-9',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 inMonth ? 'text-foreground' : 'text-muted-foreground/50',
                 isSelected

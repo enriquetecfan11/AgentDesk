@@ -179,7 +179,7 @@ export function NoteEditor({
           }}
           aria-label="Título de la nota"
           placeholder="Título de la nota"
-          className="h-9 border-0 px-1 text-base font-semibold shadow-none focus-visible:ring-0 dark:bg-transparent"
+          className="h-9 min-w-0 border-0 px-1 text-base font-semibold shadow-none focus-visible:ring-0 dark:bg-transparent"
         />
 
         <Select

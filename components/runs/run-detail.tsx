@@ -237,7 +237,7 @@ export function RunDetailLive({ initial }: { initial: RunDetailDTO }) {
         <Section title="Artefactos" description={`${detail.artifacts.length}`}>
           <ul className="divide-y divide-border">
             {detail.artifacts.map((artifact) => (
-              <li key={artifact.id} className="flex items-center gap-2 px-3 py-2">
+              <li key={artifact.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2">
                 <FileText className="size-3.5 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1 truncate text-xs">{artifact.name}</span>
                 <span className="shrink-0 text-[11px] text-muted-foreground">

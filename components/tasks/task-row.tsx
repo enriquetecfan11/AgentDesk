@@ -130,7 +130,7 @@ export function TaskRow({
       </button>
 
       {onDelete && (
-        <div className="flex w-9 shrink-0 items-center justify-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+        <div className="flex w-9 shrink-0 items-center justify-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 max-sm:opacity-100">
           <Button
             variant="ghost"
             size="icon"

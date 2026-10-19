@@ -149,7 +149,7 @@ export function ProjectsView({ initialProjects }: { initialProjects: ProjectDTO[
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="size-7 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                          className="size-7 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-sm:opacity-100"
                           aria-label={`Acciones de ${project.name}`}
                         >
                           <MoreHorizontal className="size-4" />

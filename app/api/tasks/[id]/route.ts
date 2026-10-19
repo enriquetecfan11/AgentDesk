@@ -1,5 +1,5 @@
 import { HttpError, json, readJson, requireApiUser, requireUuid, route } from '@/lib/api/http';
-import { logActivity } from '@/lib/domain/activity';
+import { listActivityForEntity, logActivity } from '@/lib/domain/activity';
 import { deleteTask, getSubtasks, getTask, setTaskLabels, updateTask } from '@/lib/domain/tasks';
 import { taskLabelsSchema, taskUpdateSchema } from '@/lib/validation';
 
@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 
 type Context = { params: Promise<{ id: string }> };
 
-/** GET /api/tasks/:id — includes the subtask list for the detail panel. */
+/** GET /api/tasks/:id — subtasks and timeline for the detail panel. */
 export async function GET(_request: Request, { params }: Context) {
   return route(async () => {
     await requireApiUser();
@@ -17,7 +17,12 @@ export async function GET(_request: Request, { params }: Context) {
     const task = await getTask(id);
     if (!task) throw new HttpError(404, 'Tarea no encontrada');
 
-    return json({ task, subtasks: await getSubtasks(id) });
+    const [subtasks, activity] = await Promise.all([
+      getSubtasks(id),
+      listActivityForEntity('task', id, 25),
+    ]);
+
+    return json({ task, subtasks, activity });
   });
 }
 
@@ -73,7 +78,13 @@ export async function PATCH(request: Request, { params }: Context) {
           ? { title: task.title, from: before.autonomy, to: task.autonomy }
           : statusChanged
             ? { from: before.status, to: task.status, title: task.title }
-            : { fields: Object.keys(input), title: task.title },
+            : {
+                fields: [
+                  ...Object.keys(input),
+                  ...(labelsParsed.success ? ['labelIds'] : []),
+                ],
+                title: task.title,
+              },
     });
 
     return json({ task: await getTask(task.id), recurrenceAdvanced });

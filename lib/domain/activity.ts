@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 
 import { db } from '@/lib/db/client';
 import { activityLog } from '@/lib/db/schema';
@@ -72,7 +72,7 @@ export async function listActivityForEntity(
   const rows = await db
     .select()
     .from(activityLog)
-    .where(eq(activityLog.entityId, entityId))
+    .where(and(eq(activityLog.entityType, entityType), eq(activityLog.entityId, entityId)))
     .orderBy(desc(activityLog.createdAt))
     .limit(limit);
 

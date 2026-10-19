@@ -59,7 +59,7 @@ export function ApprovalsWorkspace({ initialApprovals }: { initialApprovals: App
 
         <div className="ml-auto">
           <Select value={filter} onValueChange={setFilter}>
-            <SelectTrigger className="h-8 w-auto gap-1.5 text-xs" aria-label="Filtrar por estado">
+            <SelectTrigger className="h-8 w-auto max-w-full gap-1.5 text-xs" aria-label="Filtrar por estado">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -118,11 +118,11 @@ export function ApprovalsWorkspace({ initialApprovals }: { initialApprovals: App
 
                     <span className="min-w-0 flex-1 truncate text-sm">{approval.title}</span>
 
-                    <code className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                    <code className="max-w-full shrink-0 truncate font-mono text-[11px] text-muted-foreground">
                       {approval.tool}
                     </code>
 
-                    <span className="shrink-0 text-[11px] text-muted-foreground">
+                    <span className="max-w-full shrink-0 truncate text-[11px] text-muted-foreground">
                       {approval.agent?.name ?? '—'}
                     </span>
 

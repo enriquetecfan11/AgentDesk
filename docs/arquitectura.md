@@ -64,6 +64,35 @@ Decisiones de diseño relevantes:
 
 ---
 
+## Diseño responsive
+
+La adaptación no vive en cada pantalla: un único `AppShell` posee el estado de la barra lateral y
+decide cómo se reparte el ancho. Las páginas solo declaran su contenido.
+
+- **Tres estados, una preferencia.** La barra lateral puede estar expandida (`w-60`), colapsada
+  (`w-16`, solo iconos con tooltips) u oculta (`w-0`). La elección se guarda en `localStorage`
+  (`agentdesk.sidebar`); si no hay ninguna, una tablet (768–1199 px) arranca colapsada y el resto
+  expandida. El botón de la cabecera siempre puede recuperarla.
+- **Un contenedor que no scrollea en horizontal.** `AppShell` usa `flex h-dvh overflow-hidden`; la
+  barra es un hermano flex, así que al plegarse el ancho pasa al contenido sin medir nada, y
+  `<main>` es el único scroller vertical (`overflow-x-hidden`). Cualquier scroll horizontal es
+  local: el Kanban lo tiene dentro de cada tablero y los bloques de código lo declaran.
+- **Móvil sin barra.** Por debajo de `md` la barra desaparece y la navegación se abre en un `Sheet`
+  de Radix (overlay, clic fuera y `Escape` incluidos). El botón de menú de la cabecera es la vía de
+  vuelta.
+- **Filtros que envuelven, no que desbordan.** `PageToolbar`, `ToolbarFilters` y `ToolbarSearch`
+  centralizan la barra de filtros: el buscador ocupa la fila en móvil y crece en escritorio, los
+  controles hacen `flex-wrap` y los `Select` se limitan al ancho disponible.
+- **Diálogos y hojas dentro de la pantalla.** Los `Dialog`/`AlertDialog` usan
+  `w-[calc(100vw-2rem)]` y `max-h-[calc(100dvh-2rem)]`; el detalle de tarea es un modal centrado
+  de 720 px como máximo, pantalla completa en móvil y con la cabecera fija y el cuerpo scrolleable.
+  Edita en sitio y, al cerrar con `Escape`, con la `X` o pulsando fuera, vuelca antes el borrador:
+  nunca se pierde lo escrito.
+- **Drag & drop también con el dedo.** HTML5 DnD no existe en Android/iOS, así que las tarjetas
+  muestran un asa solo para punteros gruesos (`@media (pointer: coarse)`) que arrastra con eventos
+  de puntero (`useTouchDrag`); el ratón sigue usando DnD nativo. La tarjeta arrastrada permanece
+  montada para no perder la captura del puntero.
+
 ## Accesibilidad y rendimiento
 
 La aplicación está hecha para usarse a diario desde el ordenador y, a menudo, desde el móvil. Eso
@@ -124,11 +153,12 @@ haya miles de tareas. Las decisiones que lo sostienen:
 ```
 app/                  Rutas de Next.js (App Router)
   (auth)/             Login y asistente de primer arranque
-  (app)/              Zona autenticada: shell con sidebar
+  (app)/              Zona autenticada: AppShell con barra lateral responsive
     inbox/            Bandeja de entrada + captura rápida
     today/            Vencidas y lo de hoy
     upcoming/         Calendario de mes + día seleccionado
     tasks/            Lista y tablero, con filtros
+    board/            Un Kanban por proyecto: responsive y con scroll propio
     projects/         Listado y espacio de trabajo del proyecto
     notes/            Notas y vault
     agents/           Listado de agentes y ficha (tokens, delegaciones, runs)
@@ -158,11 +188,13 @@ components/
   agents/             Listado de agentes, ficha, token y diálogo de delegación
   approvals/          Bandeja y diálogo de decisión (payload exacto, editable)
   auth/               Formularios de login y setup
+  board/              Kanban por proyecto: tarjeta compacta y tablero con drag & drop
   capture/            Caja de captura con vista previa del análisis
   notes/              Listado, editor, renderizador de Markdown y diálogo de importación
   projects/           Listado, diálogo y espacio de trabajo del proyecto
   runs/               Listado de runs y detalle con logs en vivo
-  shell/              Sidebar, topbar, navegación móvil, tema, paleta, atajos y refresco SSE
+  shell/              AppShell (estado de la barra), sidebar, topbar, barra de filtros, tema,
+                      paleta, atajos y refresco SSE
   tasks/              Lista, tablero, secciones, calendario, panel de detalle, hook
   ui/                 Primitivas estilo shadcn/ui (Radix + Tailwind)
   webhooks/           Sección de Ajustes: alta, eventos, prueba y rotación del secreto

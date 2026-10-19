@@ -59,15 +59,15 @@ export function AgentsWorkspace({ initialAgents }: { initialAgents: AgentDTO[] }
           </p>
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
-          <div className="relative">
+        <div className="ml-auto flex w-full items-center gap-2 sm:w-auto">
+          <div className="relative min-w-0 flex-1 sm:flex-none">
             <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Buscar agentes…"
               aria-label="Buscar agentes"
-              className="h-8 w-48 pl-7 text-xs"
+              className="h-9 w-full pl-7 text-xs sm:h-8 sm:w-48"
             />
           </div>
           <NewAgentDialog onCreated={() => router.refresh()} />

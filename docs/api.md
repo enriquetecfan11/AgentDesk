@@ -17,7 +17,8 @@ Los endpoints de la izquierda exigen **sesión de usuario** (cookie `ad_session`
 | `GET` `POST` | `/api/projects` | Listar / crear proyectos (`?includeArchived=1`) |
 | `GET` `PATCH` `DELETE` | `/api/projects/:id` | Leer, editar o borrar un proyecto |
 | `GET` `POST` | `/api/tasks` | Listar / crear tareas (filtros abajo) |
-| `GET` `PATCH` `DELETE` | `/api/tasks/:id` | Leer (con subtareas), editar o borrar |
+| `GET` `PATCH` `DELETE` | `/api/tasks/:id` | Leer (con subtareas y actividad), editar o borrar |
+| `GET` | `/api/tasks/:id/activity` | Cronología de la tarea: cambios, comentarios y cierres |
 | `GET` `POST` | `/api/labels` | Listar / crear etiquetas (idempotente por nombre) |
 | `DELETE` | `/api/labels/:id` | Borrar una etiqueta |
 | `POST` | `/api/capture` | Una línea de lenguaje natural → una tarea |

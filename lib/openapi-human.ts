@@ -51,6 +51,10 @@ export function humanPaths(): Record<string, Record<string, Json>> {
     add(`/api/${resource}/{id}`, 'patch', `Actualizar ${singular}`, { body: update, schema: envelope(singular, model) });
     add(`/api/${resource}/{id}`, 'delete', `Eliminar ${singular}`, { schema: ref('Ok') });
   }
+  add('/api/tasks/{id}/activity', 'get', 'Historial de cambios de una tarea', {
+    schema: list('activity', 'Activity'),
+    description: 'Cronología propia de la tarea: creación, cambios de estado y autonomía, comentarios y cierres.',
+  });
   add('/api/auth/login', 'post', 'Iniciar sesión', { public: true, body: v.loginSchema, description: 'Emite la cookie HttpOnly ad_session. Credenciales incorrectas: 401.' });
   add('/api/auth/setup', 'get', 'Disponibilidad de la configuración inicial', { public: true });
   add('/api/auth/setup', 'post', 'Crear el primer usuario y su sesión', { public: true, body: v.setupSchema, status: 201, description: 'Solo disponible mientras no existan usuarios; en otro caso devuelve 409.' });

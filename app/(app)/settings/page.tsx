@@ -61,9 +61,13 @@ export default async function SettingsPage() {
         <dl className="divide-y divide-border rounded-lg border border-border text-sm">
           <Row label="URL base" value={env.APP_BASE_URL} mono />
           <Row label="Directorio de subidas" value={env.UPLOADS_DIR} mono />
-          <div className="flex items-center justify-between gap-4 px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-3 py-2">
             <dt className="text-muted-foreground">Documentación de la API</dt>
-            <dd><Link href="/docs" className="text-sm underline underline-offset-4">Abrir documentación</Link></dd>
+            <dd>
+              <Link href="/docs" className="text-sm underline underline-offset-4">
+                Abrir documentación
+              </Link>
+            </dd>
           </div>
           <Row label="Especificación de la API" value="/api/openapi.json" mono />
           <Row label="Entorno" value={env.NODE_ENV} mono />
@@ -78,9 +82,17 @@ export default async function SettingsPage() {
 
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="flex items-center justify-between gap-4 px-3 py-2">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className={mono ? 'truncate font-mono text-xs' : 'truncate'}>{value}</dd>
+    <div className="flex flex-col gap-0.5 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+      <dt className="shrink-0 text-muted-foreground">{label}</dt>
+      <dd
+        className={
+          mono
+            ? 'min-w-0 break-words font-mono text-xs sm:text-right'
+            : 'min-w-0 break-words sm:text-right'
+        }
+      >
+        {value}
+      </dd>
     </div>
   );
 }

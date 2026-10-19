@@ -147,7 +147,7 @@ export function ProjectWorkspace({
                 </button>
                 <span
                   className={cn(
-                    'text-sm',
+                    'min-w-0 flex-1 truncate text-sm',
                     milestone.done && 'text-muted-foreground line-through',
                   )}
                 >

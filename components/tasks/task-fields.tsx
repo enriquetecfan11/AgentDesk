@@ -134,7 +134,7 @@ export function DueDateField({
   onChange: (next: { dueDate: string | null; dueTime: string | null }) => void;
 }) {
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex flex-wrap items-center gap-1.5">
       <Input
         type="date"
         value={date ?? ''}
@@ -174,11 +174,13 @@ export function LabelPicker({
   selectedIds,
   onChange,
   onCreate,
+  className,
 }: {
   labels: LabelDTO[];
   selectedIds: string[];
   onChange: (ids: string[]) => void;
   onCreate?: (name: string) => Promise<LabelDTO | null>;
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState('');
@@ -192,7 +194,7 @@ export function LabelPicker({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
+        <Button variant="outline" size="sm" className={cn('h-8 gap-1.5 text-xs', className)}>
           Etiquetas
           {selectedIds.length > 0 && (
             <span className="rounded bg-muted px-1 tabular-nums">{selectedIds.length}</span>

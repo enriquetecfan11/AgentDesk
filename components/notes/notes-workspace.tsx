@@ -231,7 +231,7 @@ export function NotesWorkspace({
     <div className="flex h-full">
       <aside
         className={cn(
-          'w-full flex-col border-r border-border sm:flex sm:w-72 sm:shrink-0',
+          'flex w-full flex-col border-r border-border sm:w-72 sm:shrink-0',
           pane === 'editor' && 'hidden sm:flex',
         )}
       >

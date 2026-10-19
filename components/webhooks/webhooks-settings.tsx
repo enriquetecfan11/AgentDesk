@@ -158,7 +158,7 @@ function WebhookRow({ webhook }: { webhook: WebhookDTO }) {
   return (
     <li className={cn('space-y-2 p-3', !webhook.active && 'opacity-60')}>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="truncate text-sm font-medium">{webhook.name}</span>
+        <span className="min-w-0 max-w-full truncate text-sm font-medium">{webhook.name}</span>
 
         <Switch
           checked={active}

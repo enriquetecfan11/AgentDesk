@@ -171,7 +171,7 @@ export function AgentDetail({
         <div className="flex flex-wrap items-center gap-2">
           <span className={cn('size-2 rounded-full', statusMeta.dot)} aria-hidden />
           <Select value={agent.status} onValueChange={(value) => void changeStatus(value as AgentDTO['status'])}>
-            <SelectTrigger className="h-8 w-auto gap-1.5 text-xs" aria-label="Estado del agente">
+            <SelectTrigger className="h-8 w-auto max-w-full gap-1.5 text-xs" aria-label="Estado del agente">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -412,7 +412,7 @@ export function AgentDetail({
                   >
                     <span className={cn('size-2 shrink-0 rounded-full', meta.dot)} aria-hidden />
                     <span className={cn('text-xs', meta.text)}>{meta.label}</span>
-                    <span className="truncate text-xs text-muted-foreground">
+                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
                       {run.task?.title ?? run.id.slice(0, 8)}
                     </span>
                     <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">

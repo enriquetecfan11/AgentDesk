@@ -804,6 +804,20 @@ export function buildOpenApi(baseUrl: string) {
         TaskList: listOf('tasks', 'Task'),
         TaskCreate: inputSchema(validation.taskCreateSchema),
         TaskUpdate: inputSchema(validation.taskUpdateSchema),
+        Activity: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            actorType: { type: 'string', enum: ['human', 'agent', 'system'] },
+            actorId: { type: 'string', format: 'uuid', nullable: true },
+            actorName: { type: 'string' },
+            action: { type: 'string', description: 'Nombre legible de la acción, p. ej. `task.status_changed`.' },
+            entityType: { type: 'string', nullable: true },
+            entityId: { type: 'string', format: 'uuid', nullable: true },
+            meta: { type: 'object', nullable: true, additionalProperties: true },
+            createdAt: { type: 'string', format: 'date-time' },
+          },
+        },
         Comment: {
           type: 'object',
           properties: {

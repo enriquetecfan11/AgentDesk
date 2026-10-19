@@ -65,20 +65,20 @@ export function RunsWorkspace({
           </p>
         </div>
 
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <div className="relative">
+        <div className="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+          <div className="relative w-full min-w-0 sm:w-auto">
             <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Buscar por tarea, salida…"
               aria-label="Buscar runs"
-              className="h-8 w-48 pl-7 text-xs"
+              className="h-9 w-full pl-7 text-xs sm:h-8 sm:w-48"
             />
           </div>
 
           <Select value={agentId} onValueChange={setAgentId}>
-            <SelectTrigger className="h-8 w-auto gap-1.5 text-xs" aria-label="Filtrar por agente">
+            <SelectTrigger className="h-8 w-auto max-w-full gap-1.5 text-xs" aria-label="Filtrar por agente">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -94,7 +94,7 @@ export function RunsWorkspace({
           </Select>
 
           <Select value={status} onValueChange={setStatus}>
-            <SelectTrigger className="h-8 w-auto gap-1.5 text-xs" aria-label="Filtrar por estado">
+            <SelectTrigger className="h-8 w-auto max-w-full gap-1.5 text-xs" aria-label="Filtrar por estado">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
