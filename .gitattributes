@@ -1,0 +1,11 @@
+# Un checkout en Windows (core.autocrlf=true) convertiría los scripts a CRLF
+# y el contenedor fallaría con "exec ./entrypoint.sh: no such file or directory".
+# Los scripts y el Dockerfile son siempre LF, en cualquier máquina.
+* text=auto
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.mjs text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.sql text eol=lf
+*.json text eol=lf

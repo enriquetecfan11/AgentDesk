@@ -218,6 +218,7 @@ cruzada. La única variable que cambia al migrar es `APP_BASE_URL`.
 | Comando | Qué hace |
 |---|---|
 | `docker compose up -d --build` | Levanta todo; las migraciones se aplican solas |
+| `./scripts/doctor.sh` | Diagnóstico previo: Docker, red, RAM, disco, `.env`, puerto |
 | `./scripts/verify.sh` | Comprueba que la instalación responde |
 | `./scripts/smoke.sh` | Prueba de humo: 134 comprobaciones de la API de punta a punta |
 | `./scripts/seed.sh` | Datos de ejemplo, por la API pública |

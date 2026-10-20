@@ -25,6 +25,18 @@ La primera vez tarda unos minutos porque compila la imagen. Las migraciones se a
 automáticamente al arrancar (el `entrypoint` del contenedor las ejecuta antes de levantar
 el servidor).
 
+Si el build falla en otra máquina (una VM de Proxmox, un servidor, un NAS), ejecuta antes
+el diagnóstico. No modifica nada y dice qué falta:
+
+```bash
+./scripts/doctor.sh
+```
+
+Comprueba Docker y Compose v2, permisos del daemon, arquitectura de la imagen, RAM y disco,
+DNS y salida HTTPS (Docker Hub y npm), `.env`, puerto y finales de línea CRLF. Los fallos
+típicos en una máquina recién instalada son: usuario fuera del grupo `docker`, falta `.env`,
+VM con menos de 2 GB de RAM (el build muere por OOM) o Docker sin salida a internet.
+
 Para ver qué está pasando:
 
 ```bash
