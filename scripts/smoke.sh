@@ -309,6 +309,41 @@ code="$(status -b "$JAR" -X POST "$BASE/api/notes" -H 'Content-Type: application
   -d '{"title":"Nota de humo A"}')"
 [ "$code" = "409" ] && ok "título duplicado → 409" || bad "título duplicado → $code (esperado 409)"
 
+# Append y create-or-replace por título (API humana).
+append_1="$(curl -fsS -b "$JAR" -X POST "$BASE/api/notes/append" -H 'Content-Type: application/json' \
+  -d '{"title":"Nota de humo append","contentMd":"primera línea"}')"
+APPEND_NOTE_ID="$(printf '%s' "$append_1" | jget note.id)"
+[ "$(printf '%s' "$append_1" | jget created)" = "True" ] \
+  && ok "append crea la nota si no existe" || bad "append no creó la nota"
+
+append_2="$(curl -fsS -b "$JAR" -X POST "$BASE/api/notes/append" -H 'Content-Type: application/json' \
+  -d '{"title":"Nota de humo append","contentMd":"segunda línea"}')"
+[ "$(printf '%s' "$append_2" | jget created)" = "False" ] \
+  && ok "append añade a la nota existente" || bad "append volvió a crear la nota"
+[ "$(printf '%s' "$append_2" | jget note.contentMd)" = "primera línea
+
+segunda línea" ] && ok "el contenido se une con una línea en blanco" || bad "el contenido no se unió bien"
+[ "$(printf '%s' "$append_2" | jget note.authorType)" = "human" ] \
+  && ok "la nota recuerda que la escribió el humano" || bad "falta la autoría humana"
+
+[ "$(curl -fsS -b "$JAR" "$BASE/api/notes/by-title?title=nota%20de%20humo%20append" | jget note.id)" = "$APPEND_NOTE_ID" ] \
+  && ok "by-title resuelve sin distinguir mayúsculas" || bad "by-title no encontró la nota"
+
+upsert_1="$(curl -fsS -b "$JAR" -X PUT "$BASE/api/notes/by-title" -H 'Content-Type: application/json' \
+  -d '{"title":"Nota de humo upsert","contentMd":"versión uno"}')"
+UPSERT_NOTE_ID="$(printf '%s' "$upsert_1" | jget note.id)"
+upsert_2="$(curl -fsS -b "$JAR" -X PUT "$BASE/api/notes/by-title" -H 'Content-Type: application/json' \
+  -d '{"title":"Nota de humo upsert","contentMd":"versión dos"}')"
+[ "$(printf '%s' "$upsert_2" | jget created)" = "False" ] \
+  && [ "$(printf '%s' "$upsert_2" | jget note.contentMd)" = "versión dos" ] \
+  && ok "upsert reemplaza conservando el id" || bad "upsert no reemplazó el contenido"
+[ "$(printf '%s' "$upsert_2" | jget note.id)" = "$UPSERT_NOTE_ID" ] \
+  && ok "y la nota sigue siendo la misma" || bad "upsert cambió el id"
+
+page="$(curl -fsS -b "$JAR" "$BASE/api/notes?limit=1&offset=0")"
+[ -n "$(printf '%s' "$page" | jget total)" ] && [ -n "$(printf '%s' "$page" | jget notes.0.id)" ] \
+  && ok "el listado pagina con total y nextOffset" || bad "la paginación no devolvió metadatos"
+
 # Importar un .md con frontmatter, sin pisar lo existente.
 import_body='{"files":[{"name":"Importada.md","content":"---\ntitle: Importada de Obsidian\ntags: [seguridad]\n---\n\nver [[Nota de humo A]]"}],"overwrite":false}'
 import_1="$(curl -fsS -b "$JAR" -X POST "$BASE/api/notes/import" -H 'Content-Type: application/json' -d "$import_body")"
@@ -411,6 +446,46 @@ auth_api() { curl -s -H "Authorization: Bearer $AGENT_TOKEN" "$@"; }
   && ok "un token que no existe → 401" || bad "un token inexistente autenticó"
 [ "$(status -H "Authorization: Bearer $LIMITED_TOKEN" "$BASE/api/v1/tasks")" = "403" ] \
   && ok "scope insuficiente → 403" || bad "el scope no se está comprobando"
+
+# Notas de agentes: append atómico, búsqueda por título, autoría y borrado.
+agent_note="$(auth_api -X POST "$BASE/api/v1/notes/append" -H 'Content-Type: application/json' \
+  -d '{"title":"Diario del agente","contentMd":"primera entrada"}')"
+AGENT_NOTE_ID="$(printf '%s' "$agent_note" | jget note.id)"
+[ "$(printf '%s' "$agent_note" | jget created)" = "True" ] \
+  && ok "el agente crea una nota con append" || bad "append no creó la nota del agente"
+[ "$(printf '%s' "$agent_note" | jget note.authorType)" = "agent" ] \
+  && [ "$(printf '%s' "$agent_note" | jget note.authorName)" = "Agente de humo" ] \
+  && ok "la nota queda atribuida al agente" || bad "la autoría de la nota es incorrecta"
+
+agent_note_2="$(auth_api -X POST "$BASE/api/v1/notes/append" -H 'Content-Type: application/json' \
+  -d '{"title":"Diario del agente","contentMd":"segunda entrada"}')"
+[ "$(printf '%s' "$agent_note_2" | jget created)" = "False" ] \
+  && ok "el segundo append no duplica la nota" || bad "el segundo append creó otra nota"
+[ "$(printf '%s' "$agent_note_2" | jget note.contentMd)" = "primera entrada
+
+segunda entrada" ] && ok "las dos entradas conviven en el cuerpo" || bad "append perdió contenido"
+
+[ "$(auth_api "$BASE/api/v1/notes/by-title?title=diario%20del%20agente" | jget note.id)" = "$AGENT_NOTE_ID" ] \
+  && ok "el agente lee la nota por título" || bad "by-title falló para el agente"
+
+upsert_agent="$(auth_api -X PUT "$BASE/api/v1/notes/by-title" -H 'Content-Type: application/json' \
+  -d '{"title":"Diario del agente","contentMd":"reemplazado por el agente"}')"
+[ "$(printf '%s' "$upsert_agent" | jget created)" = "False" ] \
+  && [ "$(printf '%s' "$upsert_agent" | jget note.contentMd)" = "reemplazado por el agente" ] \
+  && ok "upsert por título reemplaza el cuerpo" || bad "upsert por título falló"
+
+stale="$(status -H "Authorization: Bearer $AGENT_TOKEN" -X PUT "$BASE/api/v1/notes/by-title" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Diario del agente","contentMd":"x","expectedUpdatedAt":"2020-01-01T00:00:00.000Z"}')"
+[ "$stale" = "409" ] && ok "expectedUpdatedAt obsoleto → 409" || bad "la guarda optimista devolvió $stale"
+
+[ "$(auth_api "$BASE/api/v1/notes?authorType=agent&limit=1" | jget notes.0.authorType)" = "agent" ] \
+  && ok "el listado filtra por autor y pagina" || bad "el filtro por autor no funciona"
+
+[ "$(status -H "Authorization: Bearer $AGENT_TOKEN" -X DELETE "$BASE/api/v1/notes/$AGENT_NOTE_ID")" = "204" ] \
+  && ok "el agente borra su nota" || bad "el borrado de la nota falló"
+[ "$(status -H "Authorization: Bearer $AGENT_TOKEN" "$BASE/api/v1/notes/$AGENT_NOTE_ID")" = "404" ] \
+  && ok "y después ya no existe" || bad "la nota borrada sigue respondiendo"
 
 # Tareas a través de la API de agentes.
 task="$(auth_api -X POST "$BASE/api/v1/tasks" -H 'Content-Type: application/json' \
@@ -845,6 +920,8 @@ curl -fsS -b "$JAR" -X DELETE "$BASE/api/labels/$CAPTURED_LABEL_ID" > /dev/null 
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/notes/$NOTE_A_ID" > /dev/null && ok "nota A eliminada"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/notes/$NOTE_B_ID" > /dev/null && ok "nota B eliminada"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/notes/$IMPORTED_ID" > /dev/null && ok "nota importada eliminada"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/notes/$APPEND_NOTE_ID" > /dev/null && ok "nota de append eliminada"
+curl -fsS -b "$JAR" -X DELETE "$BASE/api/notes/$UPSERT_NOTE_ID" > /dev/null && ok "nota de upsert eliminada"
 curl -fsS -b "$JAR" -X DELETE "$BASE/api/tasks/$FLOW_TASK_ID" > /dev/null \
   && ok "tarea del flujo eliminada (con sus aprobaciones y su run)"
 [ "$(curl -fsS -b "$JAR" "$BASE/api/approvals" | jget approvals.0.id)" = "" ] \
