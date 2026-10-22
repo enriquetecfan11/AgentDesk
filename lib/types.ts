@@ -141,6 +141,9 @@ export type NoteDTO = {
   title: string;
   contentMd: string;
   source: 'app' | 'obsidian';
+  authorType: 'human' | 'agent' | 'system';
+  authorId: string | null;
+  authorName: string;
   projectId: string | null;
   taskId: string | null;
   createdAt: string;
@@ -155,6 +158,9 @@ export type NoteListItemDTO = {
   title: string;
   /** Plain-text beginning of the note, for the list. */
   excerpt: string;
+  authorType: 'human' | 'agent' | 'system';
+  authorId: string | null;
+  authorName: string;
   projectId: string | null;
   project: ProjectRef | null;
   updatedAt: string;

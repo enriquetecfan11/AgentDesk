@@ -20,7 +20,7 @@ export async function POST(request: Request) {
     const user = await requireApiUser();
     const input = await parseJson(request, noteImportSchema);
 
-    const summary = await importNotes(input);
+    const summary = await importNotes(input, { type: 'human', id: user.id, name: user.name });
 
     await logActivity({
       actor: { type: 'human', id: user.id, name: user.name },

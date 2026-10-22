@@ -23,8 +23,10 @@ Los endpoints de la izquierda exigen **sesión de usuario** (cookie `ad_session`
 | `DELETE` | `/api/labels/:id` | Borrar una etiqueta |
 | `POST` | `/api/capture` | Una línea de lenguaje natural → una tarea |
 | `GET` | `/api/search?q=` | Tareas y proyectos para la paleta (mínimo 2 caracteres) |
-| `GET` `POST` | `/api/notes` | Listar / crear notas (`?q=` y `?projectId=` para filtrar) |
+| `GET` `POST` | `/api/notes` | Listar / crear notas (`?q=`, `?projectId=`, `?authorType=`, `?authorId=`, `?limit=`, `?offset=`) |
 | `GET` `PATCH` `DELETE` | `/api/notes/:id` | Nota con sus backlinks y enlaces salientes |
+| `GET` `PUT` | `/api/notes/by-title` | Leer por título (`?title=`) o crear/reemplazar sin conocer el id |
+| `POST` | `/api/notes/append` | Añadir Markdown al final; crea la nota si no existe |
 | `POST` | `/api/notes/import` | Importar varios `.md` (`{ files: [{ name, content }], overwrite }`) |
 | `GET` | `/api/notes/export` | Descargar el vault completo en un `.zip` |
 | `GET` `POST` | `/api/agents` | Listar / crear agentes (`?archived=true`) |
@@ -386,7 +388,9 @@ en un segundo provoca un render, no cincuenta.
 | `GET` `POST` | `/api/v1/tasks/:id/comments` | `tasks:read` / `tasks:write` |
 | `GET` `POST` | `/api/v1/projects` | `projects:read` / `projects:write` |
 | `GET` `POST` | `/api/v1/notes` | `notes:read` / `notes:write` |
-| `GET` `PATCH` | `/api/v1/notes/:id` | `notes:read` / `notes:write` |
+| `GET` `PUT` | `/api/v1/notes/by-title` | `notes:read` / `notes:write` |
+| `POST` | `/api/v1/notes/append` | `notes:write` |
+| `GET` `PATCH` `DELETE` | `/api/v1/notes/:id` | `notes:read` / `notes:write` |
 | `GET` `POST` | `/api/v1/delegations` | `delegations:read` / `delegations:write` |
 | `GET` `PATCH` | `/api/v1/delegations/:id` | `delegations:read` / `delegations:write` |
 | `GET` `POST` | `/api/v1/runs` | `runs:read` / `runs:write` |
@@ -394,6 +398,12 @@ en un segundo provoca un render, no cincuenta.
 | `GET` `POST` | `/api/v1/runs/:id/logs` | `runs:read` / `runs:write` |
 | `GET` `POST` | `/api/v1/runs/:id/artifacts` | `runs:read` / `runs:write` |
 | `GET` | `/api/v1/events` | — (token válido) |
+
+Las notas llevan autoría (`authorType`, `authorId`, `authorName`). `GET /api/v1/notes` pagina con
+`limit` y `offset` y devuelve `{ notes, total, limit, offset, nextOffset }`. `POST
+/api/v1/notes/append` y `PUT /api/v1/notes/by-title` responden con el detalle de la nota más
+`created` (`201` si la crearon, `200` si la modificaron). El título de `by-title` viaja en
+`?title=`, no en la ruta, porque puede contener `/`, `#` o acentos.
 
 Los filtros de `/api/v1/tasks` son los mismos que los de `/api/tasks`. Los `id` de agente, tarea,
 run y delegación son siempre UUID: un id mal formado devuelve `404`, no un error de base de datos.

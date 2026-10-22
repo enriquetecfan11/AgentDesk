@@ -1,24 +1,26 @@
 import { HttpError, json, parseJson, route } from '@/lib/api/http';
+import { noteFiltersFromUrl } from '@/lib/api/query';
 import { agentActivityActor, requireAgent } from '@/lib/auth/agent';
 import { logActivity } from '@/lib/domain/activity';
-import { createNote, DuplicateNoteTitleError, listNotes } from '@/lib/domain/notes';
+import { createNote, DuplicateNoteTitleError, listNotesPage } from '@/lib/domain/notes';
 import { noteCreateSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** GET /api/v1/notes?q=…&projectId=… */
+/**
+ * GET /api/v1/notes
+ *
+ * Filters: `q`, `projectId`, `authorType`, `authorId`, `limit`, `offset`.
+ * The response carries the page plus `total` and `nextOffset` so a client
+ * never has to guess whether there is more.
+ */
 export async function GET(request: Request) {
   return route(async () => {
     await requireAgent(request, 'notes:read');
 
-    const params = new URL(request.url).searchParams;
-    return json({
-      notes: await listNotes({
-        search: params.get('q') ?? undefined,
-        projectId: params.get('projectId') ?? undefined,
-      }),
-    });
+    const { filters, limit, offset } = noteFiltersFromUrl(request.url);
+    return json(await listNotesPage(filters, limit, offset));
   });
 }
 
@@ -27,6 +29,7 @@ export async function GET(request: Request) {
  *
  * Notes written by an agent may already point at other notes with `[[links]]`;
  * the link graph is rebuilt by the domain, so backlinks appear immediately.
+ * The author is taken from the token, never from the body.
  */
 export async function POST(request: Request) {
   return route(async () => {
@@ -35,7 +38,7 @@ export async function POST(request: Request) {
 
     let detail;
     try {
-      detail = await createNote(input);
+      detail = await createNote(input, agentActivityActor(actor));
     } catch (error) {
       if (error instanceof DuplicateNoteTitleError) throw new HttpError(409, error.message);
       throw error;

@@ -150,10 +150,36 @@ const noteSchema: Json = {
     title: { type: 'string', description: 'También es la identidad del wikilink.' },
     contentMd: { type: 'string' },
     source: { type: 'string', enum: ['app', 'obsidian'] },
+    authorType: {
+      type: 'string',
+      enum: ['human', 'agent', 'system'],
+      description: 'Quién creó la nota.',
+    },
+    authorId: { type: 'string', format: 'uuid', nullable: true },
+    authorName: { type: 'string', description: 'Nombre desnormalizado, sobrevive al borrado.' },
     projectId: { type: 'string', format: 'uuid', nullable: true },
     taskId: { type: 'string', format: 'uuid', nullable: true },
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },
+  },
+};
+
+/** The listing never carries the body: only the 140-character excerpt. */
+const noteListItemSchema: Json = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    title: { type: 'string' },
+    excerpt: { type: 'string' },
+    authorType: { type: 'string', enum: ['human', 'agent', 'system'] },
+    authorId: { type: 'string', format: 'uuid', nullable: true },
+    authorName: { type: 'string' },
+    projectId: { type: 'string', format: 'uuid', nullable: true },
+    project: { nullable: true, type: 'object' },
+    updatedAt: { type: 'string', format: 'date-time' },
+    createdAt: { type: 'string', format: 'date-time' },
+    outgoingCount: { type: 'integer' },
+    backlinkCount: { type: 'integer' },
   },
 };
 
@@ -485,13 +511,30 @@ export function buildOpenApi(baseUrl: string) {
           tags: ['Notas'],
           operationId: 'listNotes',
           summary: 'Lista de notas',
-          description: 'Scope `notes:read`.',
+          description:
+            'Scope `notes:read`. Devuelve la página, `total` y `nextOffset` (`null` en la última).',
           parameters: [
             { name: 'q', in: 'query', schema: { type: 'string' } },
             { name: 'projectId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+            {
+              name: 'authorType',
+              in: 'query',
+              schema: { type: 'string', enum: ['human', 'agent', 'system'] },
+            },
+            { name: 'authorId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+            {
+              name: 'limit',
+              in: 'query',
+              schema: { type: 'integer', minimum: 1, maximum: 500, default: 100 },
+            },
+            {
+              name: 'offset',
+              in: 'query',
+              schema: { type: 'integer', minimum: 0, default: 0 },
+            },
           ],
           responses: {
-            200: jsonResponse('Notas', 'NoteList'),
+            200: jsonResponse('Notas', 'NoteListPage'),
             401: errors[401],
             403: errors[403],
           },
@@ -501,12 +544,71 @@ export function buildOpenApi(baseUrl: string) {
           operationId: 'createNote',
           summary: 'Crea una nota',
           description:
-            'Scope `notes:write`. El título es la identidad: dos notas no pueden llamarse igual (409).',
+            'Scope `notes:write`. El título es la identidad: dos notas no pueden llamarse igual (409). El autor sale del token.',
           requestBody: jsonBody('NoteCreate'),
           responses: {
             201: jsonResponse('Nota creada', 'NoteEnvelope'),
             401: errors[401],
             403: errors[403],
+            409: { $ref: '#/components/responses/Conflict' },
+            422: errors[422],
+          },
+        },
+      },
+      '/api/v1/notes/append': {
+        post: {
+          tags: ['Notas'],
+          operationId: 'appendNote',
+          summary: 'Añade Markdown a una nota (la crea si no existe)',
+          description:
+            'Scope `notes:write`. La escritura es atómica por nota. 201 si la creó, 200 si solo añadió. ' +
+            'Si el cuerpo resultante supera 200 000 caracteres devuelve 422.',
+          requestBody: jsonBody('NoteAppend'),
+          responses: {
+            200: jsonResponse('Contenido añadido', 'NoteAppendEnvelope'),
+            201: jsonResponse('Nota creada', 'NoteAppendEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
+            409: { $ref: '#/components/responses/Conflict' },
+            422: errors[422],
+          },
+        },
+      },
+      '/api/v1/notes/by-title': {
+        get: {
+          tags: ['Notas'],
+          operationId: 'getNoteByTitle',
+          summary: 'Una nota por título',
+          description:
+            'Scope `notes:read`. El título va en `?title=` porque puede contener `/`, `#` o acentos. ' +
+            'La búsqueda ignora mayúsculas y acentos.',
+          parameters: [
+            { name: 'title', in: 'query', required: true, schema: { type: 'string' } },
+          ],
+          responses: {
+            200: jsonResponse('Nota', 'NoteDetailEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
+            422: errors[422],
+          },
+        },
+        put: {
+          tags: ['Notas'],
+          operationId: 'upsertNoteByTitle',
+          summary: 'Crea o reemplaza una nota por título',
+          description:
+            'Scope `notes:write`. 201 si la creó, 200 si la reemplazó. ' +
+            '`createIfMissing: false` convierte una nota ausente en 404; ' +
+            '`expectedUpdatedAt` convierte una edición concurrente en 409.',
+          requestBody: jsonBody('NoteUpsert'),
+          responses: {
+            200: jsonResponse('Nota reemplazada', 'NoteAppendEnvelope'),
+            201: jsonResponse('Nota creada', 'NoteAppendEnvelope'),
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
             409: { $ref: '#/components/responses/Conflict' },
             422: errors[422],
           },
@@ -538,6 +640,20 @@ export function buildOpenApi(baseUrl: string) {
             404: errors[404],
             409: { $ref: '#/components/responses/Conflict' },
             422: errors[422],
+          },
+        },
+        delete: {
+          tags: ['Notas'],
+          operationId: 'deleteNote',
+          summary: 'Elimina una nota',
+          description:
+            'Scope `notes:write`. Es destructivo: los enlaces que apuntaban a la nota quedan sin destino. Devuelve 204.',
+          parameters: [taskIdParam],
+          responses: {
+            204: { description: 'Nota eliminada' },
+            401: errors[401],
+            403: errors[403],
+            404: errors[404],
           },
         },
       },
@@ -860,9 +976,33 @@ export function buildOpenApi(baseUrl: string) {
             backlinks: { type: 'array', items: { type: 'object' } },
           },
         },
-        NoteList: listOf('notes', 'Note'),
+        NoteList: listOf('notes', 'NoteListItem'),
+        NoteListItem: noteListItemSchema,
+        NoteListPage: {
+          type: 'object',
+          properties: {
+            notes: { type: 'array', items: { $ref: '#/components/schemas/NoteListItem' } },
+            total: { type: 'integer' },
+            limit: { type: 'integer' },
+            offset: { type: 'integer' },
+            nextOffset: { type: 'integer', nullable: true },
+          },
+        },
+        NoteAppendEnvelope: {
+          type: 'object',
+          properties: {
+            note: { $ref: '#/components/schemas/Note' },
+            project: { nullable: true, type: 'object' },
+            backlinks: { type: 'array', items: { type: 'object' } },
+            outgoing: { type: 'array', items: { type: 'object' } },
+            related: { type: 'array', items: { type: 'object' } },
+            created: { type: 'boolean' },
+          },
+        },
         NoteCreate: inputSchema(validation.noteCreateSchema),
         NoteUpdate: inputSchema(validation.noteUpdateSchema),
+        NoteAppend: inputSchema(validation.noteAppendSchema),
+        NoteUpsert: inputSchema(validation.noteUpsertSchema),
         Delegation: delegationSchema,
         DelegationEnvelope: {
           type: 'object',

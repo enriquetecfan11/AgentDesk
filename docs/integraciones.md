@@ -179,6 +179,17 @@ Siguen estando las de siempre, con el mismo nombre y la misma forma: `whoami`, `
 `create_note`, `update_note`, `list_delegations`, `update_delegation`, `start_run`, `log_run`,
 `finish_run` y `add_artifact`.
 
+Para las notas hay cuatro herramientas nuevas: `get_note_by_title` (leer por título),
+`append_note` (añadir Markdown, creando la nota si no existe), `upsert_note` (crear o reemplazar
+por título) y `delete_note` (borrar por id, destructivo). `append_note` y `upsert_note` no
+necesitan conocer el `id`, que es como un agente piensa en «el diario de hoy» o «el estado del
+despliegue». `list_notes` acepta además `authorType`, `authorId`, `limit` y `offset`.
+
+Las herramientas de notas **no pasan por el flujo de aprobaciones**: una nota no siempre tiene una
+tarea a la que colgar la aprobación. El control es el scope `notes:write`, y cada escritura o
+borrado queda en la actividad con el agente como autor. Si un token no debe borrar notas, no le
+des `notes:write`.
+
 **No hay scopes nuevos.** Los de siempre bastan, y un token al que le falte uno recibe el `403`
 con el nombre del que falta, como texto que el modelo puede leer. Un fallo de una herramienta
 nunca rompe el protocolo MCP: viaja como un resultado con `isError`.

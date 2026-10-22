@@ -118,7 +118,7 @@ móvil.
 | **Hoy / Próximas** | Lo vencido y lo de hoy; calendario de mes con el día seleccionado |
 | **Tareas** | Lista y tablero Kanban, subtareas, repeticiones, filtros y vistas guardadas |
 | **Proyectos** | Estados, color, fecha objetivo y progreso por tareas |
-| **Notas** | Markdown con `[[wikilinks]]` y backlinks resueltos en el servidor; import/export compatible con un vault de Obsidian |
+| **Notas** | Markdown con `[[wikilinks]]` y backlinks resueltos en el servidor; autoría humana o de agente, escritura por título y append atómico para diarios; import/export compatible con un vault de Obsidian |
 | **Agentes** | Ficha propia, token con scopes, cola de trabajo, historial de runs y aprobación o rechazo de delegaciones |
 | **Runs** | Detalle en vivo con logs en streaming y artefactos (texto, URL o fichero) |
 | **Aprobaciones** | Lo que un agente quiere hacer y no puede hacer solo, con sus argumentos exactos: apruebas, editas los argumentos o rechazas con un motivo que el agente recibe |

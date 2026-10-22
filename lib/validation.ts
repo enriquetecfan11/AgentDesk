@@ -184,18 +184,66 @@ export const captureSchema = z.object({
 
 export const NOTE_CONTENT_MAX = 200_000;
 
+/** The title is the identity of a note: every write path validates it once. */
+export const noteTitleSchema = z.string().trim().min(1, 'El título es obligatorio').max(200);
+
+export const noteAuthorTypeSchema = z.enum(['human', 'agent', 'system']);
+
 export const noteCreateSchema = z.object({
-  title: z.string().trim().min(1, 'El título es obligatorio').max(200),
+  title: noteTitleSchema,
   contentMd: z.string().max(NOTE_CONTENT_MAX).default(''),
   projectId: z.uuid().nullish(),
   taskId: z.uuid().nullish(),
 });
 
 export const noteUpdateSchema = z.object({
-  title: z.string().trim().min(1, 'El título es obligatorio').max(200).optional(),
+  title: noteTitleSchema.optional(),
   contentMd: z.string().max(NOTE_CONTENT_MAX).optional(),
   projectId: z.uuid().nullish(),
   taskId: z.uuid().nullish(),
+});
+
+/**
+ * Adds markdown to the end of a note, creating it when it does not exist.
+ *
+ * `separator` is what goes between the old body and the new one; the default
+ * keeps blocks apart without leaving a growing pile of blank lines.
+ */
+export const noteAppendSchema = z.object({
+  title: noteTitleSchema,
+  contentMd: z.string().min(1, 'Hay que añadir algo de contenido').max(NOTE_CONTENT_MAX),
+  separator: z.string().max(20).default('\n\n'),
+  projectId: z.uuid().nullish(),
+  taskId: z.uuid().nullish(),
+  createIfMissing: z.boolean().default(true),
+});
+
+/**
+ * Create-or-replace addressed by title, which is how an agent thinks about a
+ * note ("the daily log", "the deployment status") without knowing its id.
+ *
+ * `expectedUpdatedAt` is an optional optimistic-concurrency guard: if the note
+ * changed since that timestamp the request fails with 409 instead of silently
+ * overwriting a human edit.
+ */
+export const noteUpsertSchema = z.object({
+  title: noteTitleSchema,
+  /** Required: PUT replaces the whole body, so the empty note is explicit. */
+  contentMd: z.string().max(NOTE_CONTENT_MAX),
+  projectId: z.uuid().nullish(),
+  taskId: z.uuid().nullish(),
+  createIfMissing: z.boolean().default(true),
+  expectedUpdatedAt: z.iso.datetime({ offset: true }).optional(),
+});
+
+/** Filters and paging shared by the human and the agent listings. */
+export const noteListQuerySchema = z.object({
+  q: z.string().trim().max(200).optional(),
+  projectId: z.uuid().optional(),
+  authorType: noteAuthorTypeSchema.optional(),
+  authorId: z.uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  offset: z.coerce.number().int().min(0).default(0),
 });
 
 /**
@@ -435,6 +483,9 @@ export type LabelCreateInput = z.infer<typeof labelCreateSchema>;
 export type CaptureInput = z.infer<typeof captureSchema>;
 export type NoteCreateInput = z.infer<typeof noteCreateSchema>;
 export type NoteUpdateInput = z.infer<typeof noteUpdateSchema>;
+export type NoteAppendInput = z.infer<typeof noteAppendSchema>;
+export type NoteUpsertInput = z.infer<typeof noteUpsertSchema>;
+export type NoteListQuery = z.infer<typeof noteListQuerySchema>;
 export type NoteImportInput = z.infer<typeof noteImportSchema>;
 export type AgentCreateInput = z.infer<typeof agentCreateSchema>;
 export type AgentUpdateInput = z.infer<typeof agentUpdateSchema>;

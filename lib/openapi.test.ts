@@ -17,7 +17,7 @@ describe('OpenAPI', () => {
         if (entry.isDirectory()) visit(file);
         else if (entry.name === 'route.ts' && !file.includes('/mcp/') && !file.includes('/health/') && !file.includes('/openapi.json/')) {
           const path = '/' + file.replace(/^app\//, '').replace(/\/route.ts$/, '').replace(/\[([^\]]+)\]/g, '{$1}');
-          const methods = [...readFileSync(file, 'utf8').matchAll(/export async function (GET|POST|PATCH|DELETE)\(/g)].map((m) => m[1].toLowerCase());
+          const methods = [...readFileSync(file, 'utf8').matchAll(/export async function (GET|POST|PUT|PATCH|DELETE)\(/g)].map((m) => m[1].toLowerCase());
           expect(Object.keys(paths[path]).sort(), path).toEqual(methods.sort());
         }
       }

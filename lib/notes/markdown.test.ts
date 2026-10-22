@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  joinNoteContent,
   markdownToPlainText,
   parseInline,
   parseMarkdown,
@@ -134,5 +135,28 @@ describe('markdownToPlainText', () => {
     const text = markdownToPlainText('una '.repeat(40), 20);
     expect(text.endsWith('…')).toBe(true);
     expect(text.length).toBeLessThanOrEqual(21);
+  });
+});
+
+describe('joinNoteContent', () => {
+  it('uses the addition as the whole body when the note is empty', () => {
+    expect(joinNoteContent('', '## Nota')).toBe('## Nota');
+  });
+
+  it('leaves the body alone when there is nothing to append', () => {
+    expect(joinNoteContent('cuerpo', '')).toBe('cuerpo');
+  });
+
+  it('separates blocks with one blank line, whatever the edges looked like', () => {
+    expect(joinNoteContent('uno\n\n\n', '\n\ndos')).toBe('uno\n\ndos');
+  });
+
+  it('accepts a custom separator, including none', () => {
+    expect(joinNoteContent('uno\n', 'dos', '')).toBe('unodos');
+    expect(joinNoteContent('uno\n', '\ndos\n', '---\n')).toBe('uno---\ndos\n');
+  });
+
+  it('keeps trailing spaces, because two of them are a hard break', () => {
+    expect(joinNoteContent('linea  ', 'siguiente')).toBe('linea  \n\nsiguiente');
   });
 });

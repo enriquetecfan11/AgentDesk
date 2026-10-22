@@ -271,6 +271,11 @@ export const notes = pgTable(
     title: text('title').notNull(),
     contentMd: text('content_md').notNull().default(''),
     source: noteSourceEnum('source').notNull().default('app'),
+    // Who wrote the note. `authorName` is denormalised for the same reason as
+    // in the activity log: the list and the timeline survive agent deletion.
+    authorType: actorTypeEnum('author_type').notNull().default('system'),
+    authorId: uuid('author_id'),
+    authorName: text('author_name').notNull().default('Sistema'),
     projectId: uuid('project_id').references(() => projects.id, { onDelete: 'set null' }),
     taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
     createdAt,
@@ -279,6 +284,7 @@ export const notes = pgTable(
   (t) => [
     index('notes_project_idx').on(t.projectId),
     index('notes_task_idx').on(t.taskId),
+    index('notes_author_idx').on(t.authorType, t.authorId),
     uniqueIndex('notes_title_unique').on(t.title),
   ],
 );

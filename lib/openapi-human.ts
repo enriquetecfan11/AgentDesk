@@ -43,8 +43,8 @@ export function humanPaths(): Record<string, Record<string, Json>> {
     ['notes', 'note', 'Note', v.noteCreateSchema, v.noteUpdateSchema],
     ['agents', 'agent', 'Agent', v.agentCreateSchema, v.agentUpdateSchema],
   ] as const) {
-    const parameters = resource === 'tasks' ? taskQueries : resource === 'projects' ? query('includeArchived') : resource === 'notes' ? query('q', 'projectId') : query('archived');
-    add(`/api/${resource}`, 'get', `Lista de ${resource}`, { schema: list(resource, model), parameters });
+    const parameters = resource === 'tasks' ? taskQueries : resource === 'projects' ? query('includeArchived') : resource === 'notes' ? query('q', 'projectId', 'authorType', 'authorId', 'limit', 'offset') : query('archived');
+    add(`/api/${resource}`, 'get', `Lista de ${resource}`, { schema: resource === 'notes' ? list(resource, 'NoteListItem') : list(resource, model), parameters });
     add(`/api/${resource}`, 'post', `Crear ${singular}`, { body: create, schema: envelope(singular, model), status: 201 });
     // Detail responses may include additional related entities (subtasks, links, tokens…).
     add(`/api/${resource}/{id}`, 'get', `Detalle de ${singular}`, { schema: envelope(singular, model) });
@@ -66,6 +66,9 @@ export function humanPaths(): Record<string, Record<string, Json>> {
   add('/api/labels/{id}', 'delete', 'Eliminar etiqueta', { schema: ref('Ok') });
   add('/api/notes/import', 'post', 'Importar notas Markdown', { body: v.noteImportSchema });
   add('/api/notes/export', 'get', 'Exportar notas como ZIP', { media: 'application/zip', schema: { type: 'string', format: 'binary' } });
+  add('/api/notes/append', 'post', 'Añadir Markdown a una nota (la crea si no existe)', { body: v.noteAppendSchema, schema: ref('NoteAppendEnvelope'), description: 'Misma semántica que la versión de agentes: 201 si la creó, 200 si solo añadió.' });
+  add('/api/notes/by-title', 'get', 'Una nota por título', { schema: ref('NoteDetailEnvelope'), parameters: [{ name: 'title', in: 'query', required: true, schema: { type: 'string' } }] });
+  add('/api/notes/by-title', 'put', 'Crear o reemplazar una nota por título', { body: v.noteUpsertSchema, schema: ref('NoteAppendEnvelope') });
   add('/api/delegations', 'get', 'Lista de delegaciones', { parameters: query('agentId', 'taskId', 'status'), schema: list('delegations', 'Delegation') });
   add('/api/delegations', 'post', 'Crear delegación', { body: v.delegationCreateSchema, status: 201, schema: envelope('delegation', 'Delegation') });
   add('/api/delegations/{id}', 'get', 'Detalle de delegación', { schema: envelope('delegation', 'Delegation') });

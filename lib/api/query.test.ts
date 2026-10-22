@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { taskFiltersFromUrl } from '@/lib/api/query';
+import { noteFiltersFromUrl, taskFiltersFromUrl } from '@/lib/api/query';
 
 const base = 'http://192.168.1.50:3000/api/tasks';
 
@@ -50,5 +50,32 @@ describe('taskFiltersFromUrl', () => {
     const malformed = taskFiltersFromUrl(`${base}?dueBefore=31/01/2026&dueAfter=ayer`);
     expect(malformed.dueOnOrBefore).toBeUndefined();
     expect(malformed.dueOnOrAfter).toBeUndefined();
+  });
+});
+
+describe('noteFiltersFromUrl', () => {
+  const notesBase = 'http://192.168.1.50:3000/api/v1/notes';
+
+  it('uses the documented paging defaults', () => {
+    expect(noteFiltersFromUrl(notesBase)).toEqual({ filters: {}, limit: 100, offset: 0 });
+  });
+
+  it('reads the author filters and the page window', () => {
+    const query = noteFiltersFromUrl(
+      `${notesBase}?q=diario&authorType=agent&limit=25&offset=50`,
+    );
+    expect(query.filters).toMatchObject({ search: 'diario', authorType: 'agent' });
+    expect(query.limit).toBe(25);
+    expect(query.offset).toBe(50);
+  });
+
+  it('clamps the page size instead of trusting the client', () => {
+    expect(noteFiltersFromUrl(`${notesBase}?limit=9999`).limit).toBe(100);
+    expect(noteFiltersFromUrl(`${notesBase}?offset=-3`).offset).toBe(0);
+  });
+
+  it('drops one malformed value without losing the rest', () => {
+    const query = noteFiltersFromUrl(`${notesBase}?projectId=nope&authorType=robot&q=hola`);
+    expect(query.filters).toEqual({ search: 'hola' });
   });
 });

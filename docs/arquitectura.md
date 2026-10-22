@@ -138,10 +138,11 @@ haya miles de tareas. Las decisiones que lo sostienen:
 - **Sin dependencias de más.** La paleta de componentes se recortó a lo que se usa (quince
   primitivas en total): cada fichero que se borra es una dependencia de Radix menos que instalar y
   analizar en cada `npm ci`.
-- **Los listados tienen tope, y el tope está escrito.** Tareas y notas 500, runs y artefactos 200,
-  actividad 300. Es un espacio de trabajo personal: por debajo de esos números entra todo
-  en una consulta y sobran; por encima, un listado paginado no es lo que resuelve el problema. Se
-  prefieren límites explícitos a consultas que crecen con el uso.
+- **Los listados tienen tope, y el tope está escrito.** La UI carga hasta 500 notas y 500 tareas;
+  la API de notas pagina con `limit`/`offset` (100 por defecto, 500 como máximo), y runs y
+  artefactos se quedan en 200, actividad en 300. Es un espacio de trabajo personal: por debajo de
+  esos números entra todo en una consulta y sobran; por encima, la paginación explícita es más
+  honesta que una consulta que crece con el uso.
 - **Los cuerpos grandes no viajan enteros.** El listado de notas manda un extracto de 140
   caracteres en lugar del Markdown completo, y los ficheros se quedan en el volumen `uploads`: la
   lista lleva su tamaño y su URL de descarga, no sus bytes.

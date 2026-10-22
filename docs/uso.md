@@ -167,6 +167,32 @@ admitido es el que se usa de verdad.
 - Al **crear** una nota sí se recalcula todo: puede ser justo el título al que otra nota llevaba
   apuntando sin destino.
 
+### Notas escritas por agentes
+
+Una nota recuerda quién la creó (`authorType`, `authorId`, `authorName`) y la lista lo muestra con
+un icono cuando el autor es un agente. El filtro **Todas / Mías / Agentes** separa lo que has
+escrito tú de lo que han escrito ellos. La autoría es de quien la creó: si un agente añade
+contenido a una nota tuya, el cambio queda en la actividad pero la nota sigue siendo tuya.
+
+Los agentes pueden escribir sin conocer el `id` de la nota (`$BASE` y `$AD_TOKEN` como en la guía
+de [Integraciones](integraciones.md)):
+
+```bash
+# Añadir una entrada al diario, creándolo si no existe
+curl -s -X POST "$BASE/api/v1/notes/append" \
+  -H "Authorization: Bearer $AD_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"title":"Diario 2026-10-21","contentMd":"## 10:02\nDesplegado el runner."}'
+
+# Crear o reemplazar por título
+curl -s -X PUT "$BASE/api/v1/notes/by-title" \
+  -H "Authorization: Bearer $AD_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"title":"Estado del despliegue","contentMd":"# Estado\n\nTodo en verde."}'
+```
+
+`append` es atómico por nota: dos agentes pueden añadir a la vez sin pisarse. Si el cuerpo
+resultante supera los 200 000 caracteres, la petición entera se rechaza con `422` y la nota queda
+como estaba.
+
 ### Importar y exportar
 
 - **Exportar** descarga `agentdesk-notas-<fecha>.zip` con un `.md` por nota, con frontmatter

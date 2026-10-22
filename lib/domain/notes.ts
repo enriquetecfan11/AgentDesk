@@ -1,16 +1,35 @@
 import 'server-only';
 
-import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 
 import { db } from '@/lib/db/client';
 import { noteLinks, notes, projects } from '@/lib/db/schema';
 import { serializeNote } from '@/lib/domain/serialize';
 import { markdownFileToNote, noteToMarkdownFile } from '@/lib/notes/frontmatter';
-import { markdownToPlainText } from '@/lib/notes/markdown';
+import { joinNoteContent, markdownToPlainText } from '@/lib/notes/markdown';
 import { extractWikiLinks, normalizeTitle } from '@/lib/notes/wikilinks';
 import { emitEvent } from '@/lib/domain/events';
 import type { NoteDetailDTO, NoteListItemDTO, NoteRef } from '@/lib/types';
-import type { NoteCreateInput, NoteImportInput, NoteUpdateInput } from '@/lib/validation';
+import {
+  NOTE_CONTENT_MAX,
+  type NoteAppendInput,
+  type NoteCreateInput,
+  type NoteImportInput,
+  type NoteUpdateInput,
+  type NoteUpsertInput,
+} from '@/lib/validation';
+
+/**
+ * Who is writing. Humans and agents are both first-class authors, and the
+ * denormalised name keeps the note readable after the agent is deleted.
+ */
+export type NoteAuthor = {
+  type: 'human' | 'agent' | 'system';
+  id: string | null;
+  name: string;
+};
+
+const SYSTEM_AUTHOR: NoteAuthor = { type: 'system', id: null, name: 'Sistema' };
 
 /**
  * Thrown when a title is already taken.
@@ -24,6 +43,30 @@ export class DuplicateNoteTitleError extends Error {
   constructor(readonly title: string) {
     super(`Ya existe una nota titulada «${title}»`);
     this.name = 'DuplicateNoteTitleError';
+  }
+}
+
+/** The note disappeared between the lookup and the write. */
+export class NoteNotFoundError extends Error {
+  constructor(readonly titleOrId: string) {
+    super(`No existe la nota ${titleOrId}`);
+    this.name = 'NoteNotFoundError';
+  }
+}
+
+/** The body would exceed `NOTE_CONTENT_MAX`, so the append is refused whole. */
+export class NoteTooLargeError extends Error {
+  constructor() {
+    super(`La nota superaría el máximo de ${NOTE_CONTENT_MAX} caracteres`);
+    this.name = 'NoteTooLargeError';
+  }
+}
+
+/** Someone else wrote the note while we were writing it; retry the request. */
+export class NoteConflictError extends Error {
+  constructor(message = 'La nota está cambiando; vuelve a intentarlo') {
+    super(message);
+    this.name = 'NoteConflictError';
   }
 }
 
@@ -68,21 +111,55 @@ function toRef(row: { id: string; title: string }): NoteRef {
 export type NoteFilters = {
   search?: string;
   projectId?: string;
+  authorType?: 'human' | 'agent' | 'system';
+  authorId?: string;
   limit?: number;
+  offset?: number;
 };
 
+/** Conditions shared by the page and the count, so they can never disagree. */
+function filterConditions(filters: NoteFilters) {
+  return [
+    filters.projectId ? eq(notes.projectId, filters.projectId) : undefined,
+    filters.authorType ? eq(notes.authorType, filters.authorType) : undefined,
+    filters.authorId ? eq(notes.authorId, filters.authorId) : undefined,
+  ].filter((condition) => condition !== undefined);
+}
+
+/** Search is normalised in JS, so it happens before paging, not after a SQL LIMIT. */
+const SEARCH_SCAN_LIMIT = 5_000;
+
+function matchesSearch(title: string, contentMd: string, needle: string): boolean {
+  return (
+    normalizeTitle(title).includes(needle) ||
+    normalizeTitle(markdownToPlainText(contentMd, 140)).includes(needle)
+  );
+}
+
 export async function listNotes(filters: NoteFilters = {}): Promise<NoteListItemDTO[]> {
+  const conditions = filterConditions(filters);
+  const needle = filters.search ? normalizeTitle(filters.search) : null;
+  const limit = filters.limit ?? 500;
+  const offset = filters.offset ?? 0;
+
   const rows = await db
     .select({ note: notes, project: projects })
     .from(notes)
     .leftJoin(projects, eq(notes.projectId, projects.id))
-    .where(filters.projectId ? eq(notes.projectId, filters.projectId) : undefined)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(notes.updatedAt))
-    .limit(filters.limit ?? 500);
+    // With a search, the normalisation happens in memory: fetch a full scan and
+    // page afterwards, or a page could come back short (or empty) by accident.
+    .limit(needle ? SEARCH_SCAN_LIMIT : limit)
+    .offset(needle ? 0 : offset);
 
-  if (rows.length === 0) return [];
+  const matchingRows = needle
+    ? rows.filter(({ note }) => matchesSearch(note.title, note.contentMd, needle))
+    : rows;
 
-  const ids = rows.map((row) => row.note.id);
+  if (matchingRows.length === 0) return [];
+
+  const ids = matchingRows.map((row) => row.note.id);
 
   const [outgoing, incoming] = await Promise.all([
     db
@@ -105,15 +182,16 @@ export async function listNotes(filters: NoteFilters = {}): Promise<NoteListItem
     backlinkCount.set(row.to, (backlinkCount.get(row.to) ?? 0) + 1);
   }
 
-  const needle = filters.search ? normalizeTitle(filters.search) : null;
-
-  const items: NoteListItemDTO[] = rows.map(({ note, project }) => {
+  const items: NoteListItemDTO[] = matchingRows.map(({ note, project }) => {
     const base = serializeNote(note);
 
     return {
       id: note.id,
       title: note.title,
       excerpt: markdownToPlainText(note.contentMd, 140),
+      authorType: note.authorType,
+      authorId: note.authorId,
+      authorName: note.authorName,
       projectId: note.projectId,
       project: project
         ? {
@@ -132,11 +210,59 @@ export async function listNotes(filters: NoteFilters = {}): Promise<NoteListItem
 
   if (!needle) return items;
 
-  return items.filter(
-    (item) =>
-      normalizeTitle(item.title).includes(needle) ||
-      normalizeTitle(item.excerpt).includes(needle),
-  );
+  return items.slice(offset, offset + limit);
+}
+
+/** Total rows matching the filters, for the paging envelope. */
+export async function countNotes(filters: NoteFilters = {}): Promise<number> {
+  const conditions = filterConditions(filters);
+  const needle = filters.search ? normalizeTitle(filters.search) : null;
+
+  if (!needle) {
+    const [row] = await db
+      .select({ value: sql<number>`count(*)`.mapWith(Number) })
+      .from(notes)
+      .where(conditions.length > 0 ? and(...conditions) : undefined);
+
+    return row?.value ?? 0;
+  }
+
+  const rows = await db
+    .select({ title: notes.title, contentMd: notes.contentMd })
+    .from(notes)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .limit(SEARCH_SCAN_LIMIT);
+
+  return rows.filter((row) => matchesSearch(row.title, row.contentMd, needle)).length;
+}
+
+export type NotePage = {
+  notes: NoteListItemDTO[];
+  total: number;
+  limit: number;
+  offset: number;
+  /** Offset for the next page, or `null` when this is the last one. */
+  nextOffset: number | null;
+};
+
+/** One page plus the metadata the API returns, counted with the same filters. */
+export async function listNotesPage(
+  filters: NoteFilters = {},
+  limit = 100,
+  offset = 0,
+): Promise<NotePage> {
+  const [notes, total] = await Promise.all([
+    listNotes({ ...filters, limit, offset }),
+    countNotes(filters),
+  ]);
+
+  return {
+    notes,
+    total,
+    limit,
+    offset,
+    nextOffset: offset + notes.length < total ? offset + notes.length : null,
+  };
 }
 
 export async function getNote(id: string): Promise<NoteDetailDTO | null> {
@@ -196,6 +322,12 @@ export async function findNoteByTitle(title: string): Promise<NoteRef | null> {
   const index = await titleIndex();
   const found = index.get(normalizeTitle(title));
   return found ? toRef(found) : null;
+}
+
+/** Full detail addressed by title, which is how agents refer to a note. */
+export async function getNoteByTitle(title: string): Promise<NoteDetailDTO | null> {
+  const ref = await findNoteByTitle(title);
+  return ref ? getNote(ref.id) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -278,7 +410,10 @@ export async function rebuildAllLinks(): Promise<number> {
 // Writes
 // ---------------------------------------------------------------------------
 
-export async function createNote(input: NoteCreateInput): Promise<NoteDetailDTO> {
+export async function createNote(
+  input: NoteCreateInput,
+  author: NoteAuthor = SYSTEM_AUTHOR,
+): Promise<NoteDetailDTO> {
   const index = await titleIndex();
   if (index.has(normalizeTitle(input.title))) throw new DuplicateNoteTitleError(input.title);
 
@@ -293,6 +428,9 @@ export async function createNote(input: NoteCreateInput): Promise<NoteDetailDTO>
         projectId: input.projectId ?? null,
         taskId: input.taskId ?? null,
         source: 'app',
+        authorType: author.type,
+        authorId: author.id,
+        authorName: author.name,
       })
       .returning();
 
@@ -359,6 +497,126 @@ export async function updateNote(
   return getNote(id);
 }
 
+/**
+ * Appends markdown to the note with that title, creating it when missing.
+ *
+ * The write is a compare-and-swap on the body instead of a read-modify-write:
+ * if another writer (a human autosave, another agent) changed the note between
+ * our SELECT and our UPDATE, the UPDATE matches zero rows and we try again.
+ * That is what keeps two concurrent agents from losing one of the entries.
+ */
+export async function appendToNote(
+  input: NoteAppendInput,
+  author: NoteAuthor = SYSTEM_AUTHOR,
+): Promise<{ detail: NoteDetailDTO; created: boolean }> {
+  const existing = await findNoteByTitle(input.title);
+
+  if (!existing) {
+    if (!input.createIfMissing) throw new NoteNotFoundError(input.title);
+
+    try {
+      const detail = await createNote(
+        {
+          title: input.title,
+          contentMd: input.contentMd,
+          projectId: input.projectId,
+          taskId: input.taskId,
+        },
+        author,
+      );
+      return { detail, created: true };
+    } catch (error) {
+      // Another request created the same title in the meantime: append to it.
+      if (!(error instanceof DuplicateNoteTitleError)) throw error;
+    }
+  }
+
+  const target = existing ?? (await findNoteByTitle(input.title));
+  if (!target) throw new NoteConflictError();
+
+  const separator = input.separator ?? '\n\n';
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const [current] = await db
+      .select({ contentMd: notes.contentMd })
+      .from(notes)
+      .where(eq(notes.id, target.id))
+      .limit(1);
+
+    if (!current) throw new NoteNotFoundError(input.title);
+
+    const next = joinNoteContent(current.contentMd, input.contentMd, separator);
+    if (next.length > NOTE_CONTENT_MAX) throw new NoteTooLargeError();
+
+    const updated = await db
+      .update(notes)
+      .set({ contentMd: next, updatedAt: new Date() })
+      .where(and(eq(notes.id, target.id), eq(notes.contentMd, current.contentMd)))
+      .returning({ id: notes.id });
+
+    if (updated.length > 0) {
+      await rebuildLinks(target.id);
+      emitEvent('note.changed', { id: target.id, action: 'appended', title: input.title });
+      return { detail: (await getNote(target.id))!, created: false };
+    }
+  }
+
+  throw new NoteConflictError();
+}
+
+/**
+ * Creates or replaces a note addressed by title.
+ *
+ * Replacement goes through `updateNote`, so a renamed-through-title note still
+ * rebuilds the link graph and keeps its id.
+ */
+export async function upsertNoteByTitle(
+  input: NoteUpsertInput,
+  author: NoteAuthor = SYSTEM_AUTHOR,
+): Promise<{ detail: NoteDetailDTO; created: boolean }> {
+  const existing = await findNoteByTitle(input.title);
+
+  if (!existing) {
+    if (!input.createIfMissing) throw new NoteNotFoundError(input.title);
+
+    try {
+      const detail = await createNote(
+        {
+          title: input.title,
+          contentMd: input.contentMd,
+          projectId: input.projectId,
+          taskId: input.taskId,
+        },
+        author,
+      );
+      return { detail, created: true };
+    } catch (error) {
+      if (!(error instanceof DuplicateNoteTitleError)) throw error;
+      // Lost the creation race: fall through and replace the winner's body.
+    }
+  }
+
+  const target = existing ?? (await findNoteByTitle(input.title));
+  if (!target) throw new NoteConflictError();
+
+  if (input.expectedUpdatedAt) {
+    const current = await getNote(target.id);
+    if (!current) throw new NoteNotFoundError(input.title);
+    if (new Date(current.note.updatedAt).getTime() !== new Date(input.expectedUpdatedAt).getTime()) {
+      throw new NoteConflictError('La nota cambió desde la versión que leíste');
+    }
+  }
+
+  const detail = await updateNote(target.id, {
+    contentMd: input.contentMd,
+    ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+    ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
+  });
+
+  if (!detail) throw new NoteNotFoundError(input.title);
+  return { detail, created: false };
+}
+
 export async function deleteNote(id: string): Promise<boolean> {
   const [row] = await db
     .delete(notes)
@@ -387,7 +645,10 @@ export type ImportSummary = {
  * unless the caller asked to overwrite. Nothing is ever deleted: importing a
  * folder can only add.
  */
-export async function importNotes(input: NoteImportInput): Promise<ImportSummary> {
+export async function importNotes(
+  input: NoteImportInput,
+  author: NoteAuthor = SYSTEM_AUTHOR,
+): Promise<ImportSummary> {
   const index = await titleIndex();
   const summary: ImportSummary = { created: 0, updated: 0, skipped: 0, titles: [] };
 
@@ -425,6 +686,9 @@ export async function importNotes(input: NoteImportInput): Promise<ImportSummary
           title: parsed.title,
           contentMd: parsed.contentMd,
           source: 'obsidian',
+          authorType: author.type,
+          authorId: author.id,
+          authorName: author.name,
         })
         .returning();
 

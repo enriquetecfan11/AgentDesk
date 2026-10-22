@@ -2,6 +2,7 @@
 
 import {
   ArrowLeft,
+  Bot,
   Check,
   Eye,
   Link2,
@@ -118,6 +119,15 @@ export function NoteEditor({
 
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <SaveIndicator state={state} dirty={dirty} />
+          {detail.note.authorType !== 'human' && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full border border-border/60 px-1.5 py-0.5 text-[11px]"
+              title={`Autor: ${detail.note.authorName}`}
+            >
+              <Bot className="size-3" aria-hidden />
+              {detail.note.authorName}
+            </span>
+          )}
         </div>
 
         <div className="ml-auto flex items-center gap-1">

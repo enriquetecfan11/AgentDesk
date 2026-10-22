@@ -13,7 +13,20 @@ import {
   listDelegations,
   updateDelegationStatus,
 } from '@/lib/domain/delegations';
-import { createNote, DuplicateNoteTitleError, getNote, listNotes, updateNote } from '@/lib/domain/notes';
+import {
+  appendToNote,
+  createNote,
+  deleteNote,
+  DuplicateNoteTitleError,
+  getNote,
+  getNoteByTitle,
+  listNotesPage,
+  NoteConflictError,
+  NoteNotFoundError,
+  NoteTooLargeError,
+  updateNote,
+  upsertNoteByTitle,
+} from '@/lib/domain/notes';
 import { listProjects } from '@/lib/domain/projects';
 import { createArtifact, createRun, appendRunLogs, updateRun } from '@/lib/domain/runs';
 import { createTask, updateTask } from '@/lib/domain/tasks';
@@ -29,8 +42,10 @@ import {
 } from '@/lib/mcp/shared';
 import {
   artifactCreateSchema,
+  noteAppendSchema,
   noteCreateSchema,
   noteUpdateSchema,
+  noteUpsertSchema,
   runCreateSchema,
   runUpdateSchema,
   taskCreateSchema,
@@ -301,17 +316,42 @@ const listProjectsTool: ToolDefinition = {
   },
 };
 
+/** The note-domain failures a model can recover from, as readable tool errors. */
+function noteToolError(error: unknown): never {
+  if (
+    error instanceof DuplicateNoteTitleError ||
+    error instanceof NoteNotFoundError ||
+    error instanceof NoteTooLargeError ||
+    error instanceof NoteConflictError
+  ) {
+    throw new ToolError(error.message);
+  }
+  throw error;
+}
+
 const listNotesArgs = z.object({
   q: z.string().trim().max(200).optional(),
   projectId: uuid.optional(),
+  authorType: z.enum(['human', 'agent', 'system']).optional(),
+  authorId: uuid.optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  offset: z.coerce.number().int().min(0).default(0),
 });
 
 const listNotesTool: ToolDefinition = {
   name: 'list_notes',
-  description: 'Lista notas, con un extracto de cada una. Filtros: q, projectId.',
+  description:
+    'Lista notas, con un extracto de cada una. Filtros: q, projectId, authorType, authorId. Pagina con limit y offset.',
   inputSchema: {
     type: 'object',
-    properties: { q: { type: 'string' }, projectId: { type: 'string' } },
+    properties: {
+      q: { type: 'string' },
+      projectId: { type: 'string' },
+      authorType: { type: 'string', enum: ['human', 'agent', 'system'] },
+      authorId: { type: 'string' },
+      limit: { type: 'number' },
+      offset: { type: 'number' },
+    },
     additionalProperties: false,
   },
   schema: listNotesArgs,
@@ -319,7 +359,16 @@ const listNotesTool: ToolDefinition = {
   scope: 'notes:read',
   run: async (_ctx: ToolContext, raw) => {
     const args = parseArgs(listNotesArgs, raw);
-    return { notes: await listNotes({ search: args.q, projectId: args.projectId }) };
+    return listNotesPage(
+      {
+        search: args.q,
+        projectId: args.projectId,
+        authorType: args.authorType,
+        authorId: args.authorId,
+      },
+      args.limit,
+      args.offset,
+    );
   },
 };
 
@@ -345,6 +394,31 @@ const getNoteTool: ToolDefinition = {
   },
 };
 
+const getNoteByTitleArgs = z.object({
+  title: z.string().trim().min(1, 'El título es obligatorio').max(200),
+});
+
+const getNoteByTitleTool: ToolDefinition = {
+  name: 'get_note_by_title',
+  description:
+    'Una nota completa por su título (sin distinguir mayúsculas ni acentos), con sus backlinks y enlaces salientes.',
+  inputSchema: {
+    type: 'object',
+    properties: { title: { type: 'string' } },
+    required: ['title'],
+    additionalProperties: false,
+  },
+  schema: getNoteByTitleArgs,
+  gatedAs: null,
+  scope: 'notes:read',
+  run: async (_ctx: ToolContext, raw) => {
+    const { title } = parseArgs(getNoteByTitleArgs, raw);
+    const note = await getNoteByTitle(title);
+    if (!note) throw new ToolError(`No existe la nota «${title}»`);
+    return note;
+  },
+};
+
 const createNoteTool: ToolDefinition = {
   name: 'create_note',
   description: 'Crea una nota en Markdown. Los [[enlaces]] se resuelven al guardarla.',
@@ -366,7 +440,7 @@ const createNoteTool: ToolDefinition = {
     const input = parseArgs(noteCreateSchema, raw);
 
     try {
-      const note = await createNote(input);
+      const note = await createNote(input, agentActivityActor(ctx.actor));
       await logActivity({
         actor: agentActivityActor(ctx.actor),
         action: 'note.created',
@@ -376,8 +450,7 @@ const createNoteTool: ToolDefinition = {
       });
       return { note: note.note };
     } catch (error) {
-      if (error instanceof DuplicateNoteTitleError) throw new ToolError(error.message);
-      throw error;
+      noteToolError(error);
     }
   },
 };
@@ -418,9 +491,128 @@ const updateNoteTool: ToolDefinition = {
       });
       return { note: note.note };
     } catch (error) {
-      if (error instanceof DuplicateNoteTitleError) throw new ToolError(error.message);
-      throw error;
+      noteToolError(error);
     }
+  },
+};
+
+const appendNoteTool: ToolDefinition = {
+  name: 'append_note',
+  description:
+    'Añade Markdown al final de la nota con ese título y la crea si no existe. ' +
+    'Pensada para diarios y registros: no hace falta leer el cuerpo antes ni conocer el id. ' +
+    'Devuelve created=true cuando la creó y created=false cuando solo añadió.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      contentMd: { type: 'string' },
+      separator: { type: 'string' },
+      projectId: { type: 'string' },
+      taskId: { type: 'string' },
+      createIfMissing: { type: 'boolean' },
+    },
+    required: ['title', 'contentMd'],
+    additionalProperties: false,
+  },
+  schema: noteAppendSchema,
+  gatedAs: null,
+  scope: 'notes:write',
+  run: async (ctx: ToolContext, raw) => {
+    const input = parseArgs(noteAppendSchema, raw);
+
+    try {
+      const result = await appendToNote(input, agentActivityActor(ctx.actor));
+      await logActivity({
+        actor: agentActivityActor(ctx.actor),
+        action: result.created ? 'note.created' : 'note.appended',
+        entityType: 'note',
+        entityId: result.detail.note.id,
+        meta: { title: result.detail.note.title, chars: input.contentMd.length, via: 'mcp' },
+      });
+
+      return {
+        note: result.detail.note,
+        created: result.created,
+        backlinks: result.detail.backlinks,
+        outgoing: result.detail.outgoing,
+      };
+    } catch (error) {
+      noteToolError(error);
+    }
+  },
+};
+
+const upsertNoteTool: ToolDefinition = {
+  name: 'upsert_note',
+  description:
+    'Crea o reemplaza una nota por su título, sin necesidad de conocer el id. ' +
+    'Con createIfMissing=false falla si no existe. Devuelve created=true si la creó.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      contentMd: { type: 'string' },
+      projectId: { type: 'string' },
+      taskId: { type: 'string' },
+      createIfMissing: { type: 'boolean' },
+    },
+    required: ['title'],
+    additionalProperties: false,
+  },
+  schema: noteUpsertSchema,
+  gatedAs: null,
+  scope: 'notes:write',
+  run: async (ctx: ToolContext, raw) => {
+    const input = parseArgs(noteUpsertSchema, raw);
+
+    try {
+      const result = await upsertNoteByTitle(input, agentActivityActor(ctx.actor));
+      await logActivity({
+        actor: agentActivityActor(ctx.actor),
+        action: result.created ? 'note.created' : 'note.updated',
+        entityType: 'note',
+        entityId: result.detail.note.id,
+        meta: { title: result.detail.note.title, via: 'mcp', upsert: true },
+      });
+
+      return { note: result.detail.note, created: result.created };
+    } catch (error) {
+      noteToolError(error);
+    }
+  },
+};
+
+const deleteNoteArgs = z.object({ noteId: uuid });
+
+const deleteNoteTool: ToolDefinition = {
+  name: 'delete_note',
+  description:
+    'Elimina una nota por id. Es destructivo: los [[enlaces]] que apuntaban a ella quedan sin destino.',
+  inputSchema: {
+    type: 'object',
+    properties: { noteId: { type: 'string' } },
+    required: ['noteId'],
+    additionalProperties: false,
+  },
+  schema: deleteNoteArgs,
+  gatedAs: null,
+  scope: 'notes:write',
+  run: async (ctx: ToolContext, raw) => {
+    const { noteId } = parseArgs(deleteNoteArgs, raw);
+    const note = await getNote(noteId);
+    if (!note) throw new ToolError(`No existe la nota ${noteId}`);
+
+    await deleteNote(noteId);
+    await logActivity({
+      actor: agentActivityActor(ctx.actor),
+      action: 'note.deleted',
+      entityType: 'note',
+      entityId: noteId,
+      meta: { title: note.note.title, via: 'mcp' },
+    });
+
+    return { deleted: true, id: noteId, title: note.note.title };
   },
 };
 
@@ -659,8 +851,12 @@ export const WORKSPACE_TOOLS: ToolDefinition[] = [
   listProjectsTool,
   listNotesTool,
   getNoteTool,
+  getNoteByTitleTool,
   createNoteTool,
   updateNoteTool,
+  appendNoteTool,
+  upsertNoteTool,
+  deleteNoteTool,
   listDelegationsTool,
   updateDelegationTool,
   startRunTool,

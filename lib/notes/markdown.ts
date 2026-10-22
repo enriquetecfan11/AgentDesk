@@ -350,3 +350,21 @@ export function markdownToPlainText(source: string, limit = 0): string {
 
   return limit > 0 && text.length > limit ? `${text.slice(0, limit).trimEnd()}…` : text;
 }
+
+/**
+ * Glues appended markdown to the body of a note.
+ *
+ * Only *newlines* are trimmed at the seam — trailing spaces are meaningful in
+ * Markdown (two of them are a hard break), so they are left alone. The result
+ * never starts with the separator and never accumulates blank lines at the end.
+ */
+export function joinNoteContent(
+  previous: string,
+  addition: string,
+  separator = '\n\n',
+): string {
+  if (previous.length === 0) return addition;
+  if (addition.length === 0) return previous;
+
+  return `${previous.replace(/\n+$/, '')}${separator}${addition.replace(/^\n+/, '')}`;
+}

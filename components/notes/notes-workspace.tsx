@@ -1,6 +1,6 @@
 'use client';
 
-import { Download, FilePlus2, Loader2, Search, Upload } from 'lucide-react';
+import { Bot, Download, FilePlus2, Loader2, Search, Upload } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
@@ -39,6 +39,7 @@ export function NotesWorkspace({
   const [detail, setDetail] = useState<NoteDetailDTO | null>(null);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState('');
+  const [authorFilter, setAuthorFilter] = useState<'all' | 'human' | 'agent'>('all');
   const [importOpen, setImportOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [pane, setPane] = useState<'list' | 'editor'>('list');
@@ -81,14 +82,17 @@ export function NotesWorkspace({
 
   const filtered = useMemo(() => {
     const needle = normalizeTitle(query);
-    if (needle.length === 0) return notes;
 
-    return notes.filter(
-      (note) =>
+    return notes.filter((note) => {
+      if (authorFilter !== 'all' && note.authorType !== authorFilter) return false;
+      if (needle.length === 0) return true;
+
+      return (
         normalizeTitle(note.title).includes(needle) ||
-        normalizeTitle(note.excerpt).includes(needle),
-    );
-  }, [notes, query]);
+        normalizeTitle(note.excerpt).includes(needle)
+      );
+    });
+  }, [notes, query, authorFilter]);
 
   const noteIndex = useMemo(() => {
     const index = new Map<string, NoteRef>();
@@ -113,6 +117,9 @@ export function NotesWorkspace({
                   ...note,
                   title: next.note.title,
                   excerpt: markdownToPlainText(next.note.contentMd, 140),
+                  authorType: next.note.authorType,
+                  authorId: next.note.authorId,
+                  authorName: next.note.authorName,
                   projectId: next.note.projectId,
                   project: next.project,
                   updatedAt: next.note.updatedAt,
@@ -285,7 +292,32 @@ export function NotesWorkspace({
             Exportar
           </Button>
 
-          <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">
+          <div
+            className="ml-auto flex items-center gap-0.5 rounded-md border border-border/60 p-0.5"
+            role="group"
+            aria-label="Filtrar notas por autor"
+          >
+            {(
+              [
+                { value: 'all', label: 'Todas' },
+                { value: 'human', label: 'Mías' },
+                { value: 'agent', label: 'Agentes' },
+              ] as const
+            ).map((option) => (
+              <Button
+                key={option.value}
+                variant={authorFilter === option.value ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-6 px-1.5 text-[11px]"
+                aria-pressed={authorFilter === option.value}
+                onClick={() => setAuthorFilter(option.value)}
+              >
+                {option.label}
+              </Button>
+            ))}
+          </div>
+
+          <span className="ml-1 text-[11px] tabular-nums text-muted-foreground">
             {filtered.length}
             {filtered.length !== notes.length && `/${notes.length}`}
           </span>
@@ -316,6 +348,12 @@ export function NotesWorkspace({
                     )}
                     <span className="flex items-center gap-2 text-[11px] text-muted-foreground">
                       <span>{formatTimestamp(note.updatedAt)}</span>
+                      {note.authorType === 'agent' && (
+                        <span className="inline-flex min-w-0 items-center gap-0.5 text-primary/80">
+                          <Bot className="size-3 shrink-0" aria-hidden />
+                          <span className="truncate">{note.authorName}</span>
+                        </span>
+                      )}
                       {note.backlinkCount > 0 && <span>{note.backlinkCount} enlaces</span>}
                       {note.project && <span className="truncate">{note.project.name}</span>}
                     </span>
@@ -423,6 +461,9 @@ function toListItem(detail: NoteDetailDTO): NoteListItemDTO {
     id: detail.note.id,
     title: detail.note.title,
     excerpt: markdownToPlainText(detail.note.contentMd, 140),
+    authorType: detail.note.authorType,
+    authorId: detail.note.authorId,
+    authorName: detail.note.authorName,
     projectId: detail.note.projectId,
     project: detail.project,
     updatedAt: detail.note.updatedAt,
