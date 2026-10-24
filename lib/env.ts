@@ -7,6 +7,7 @@ import {
   DEFAULT_HEARTBEAT_SECONDS,
   DEFAULT_LEASE_TTL_SECONDS,
 } from '@/lib/agent-flow/lease';
+import { normalizeOrigin } from '@/lib/origins';
 
 /**
  * A duration in seconds, read from a string.
@@ -44,6 +45,31 @@ const schema = z.object({
     .refine((value) => !/\/\/localhost\b/.test(value), {
       message: 'APP_BASE_URL must not use "localhost" — use the LAN IP or hostname.',
     }),
+  /**
+   * Other origins this installation answers on, comma separated.
+   *
+   * The canonical URL stays in APP_BASE_URL; this is for the second (or third)
+   * door — typically a Tailscale MagicDNS name next to the LAN IP. Absolute
+   * links follow the origin the request came in by, but only for origins
+   * listed here: a Host header is attacker-controlled and is never trusted
+   * just because it reached the app.
+   */
+  APP_EXTRA_ORIGINS: z
+    .string()
+    .optional()
+    .transform((value) =>
+      (value ?? '')
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    )
+    .refine((entries) => entries.every((entry) => normalizeOrigin(entry) !== null), {
+      message:
+        'APP_EXTRA_ORIGINS must be comma-separated http(s) origins without paths, e.g. http://host:3000',
+    })
+    .refine((entries) => entries.every((entry) => !/\/\/localhost\b/.test(entry)), {
+      message: 'APP_EXTRA_ORIGINS must not use "localhost" — use the LAN IP or hostname.',
+    }),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   UPLOADS_DIR: z.string().default('./uploads'),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -65,6 +91,7 @@ export function getEnv(): Env {
 
   const parsed = schema.safeParse({
     APP_BASE_URL: process.env.APP_BASE_URL,
+    APP_EXTRA_ORIGINS: process.env.APP_EXTRA_ORIGINS,
     DATABASE_URL: process.env.DATABASE_URL,
     UPLOADS_DIR: process.env.UPLOADS_DIR,
     NODE_ENV: process.env.NODE_ENV,
@@ -82,9 +109,4 @@ export function getEnv(): Env {
 
   cached = parsed.data;
   return cached;
-}
-
-/** True when the app is served over HTTPS, which decides the cookie Secure flag. */
-export function isSecureOrigin(): boolean {
-  return getEnv().APP_BASE_URL.startsWith('https://');
 }

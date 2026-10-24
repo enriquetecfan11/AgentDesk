@@ -6,9 +6,9 @@ import { and, eq, gt } from 'drizzle-orm';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
+import { isSecureRequest } from '@/lib/base-url';
 import { db } from '@/lib/db/client';
 import { sessions, users } from '@/lib/db/schema';
-import { isSecureOrigin } from '@/lib/env';
 
 export const SESSION_COOKIE = 'ad_session';
 
@@ -52,9 +52,10 @@ export async function setSessionCookie(token: string): Promise<void> {
   store.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
-    // Must follow APP_BASE_URL: forcing `secure` on a plain-HTTP LAN
-    // deployment makes the browser silently drop the cookie.
-    secure: isSecureOrigin(),
+    // Per request, not from APP_BASE_URL: the same install may be plain HTTP on
+    // the LAN and HTTPS through a proxy, and a `Secure` cookie sent over HTTP
+    // is silently dropped by the browser.
+    secure: await isSecureRequest(),
     path: '/',
     maxAge: Math.floor(SESSION_TTL_MS / 1000),
   });

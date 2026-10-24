@@ -40,6 +40,10 @@ services:
       # Host = nombre de servicio "db". Nunca localhost.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       APP_BASE_URL: ${APP_BASE_URL}
+      # Otras puertas a la misma instalación (p. ej. nombre de Tailscale),
+      # separadas por comas. Los enlaces absolutos siguen el origen por el que
+      # entra el navegador, pero solo si está en esta lista.
+      APP_EXTRA_ORIGINS: ${APP_EXTRA_ORIGINS:-}
       UPLOADS_DIR: /app/uploads
     ports:
       - '${HOST_BIND:-0.0.0.0}:${APP_PORT:-3000}:3000'

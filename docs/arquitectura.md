@@ -35,7 +35,8 @@ Decisiones de diseño relevantes:
   Las imágenes se construyen en local con `docker compose build`, así que no hacen falta
   registries ni compilación cruzada. Nada en el repositorio depende de macOS.
 - **Nunca `localhost` en configuración.** Entre contenedores se usan nombres de servicio
-  (`db`); de cara al navegador se usa `APP_BASE_URL`.
+  (`db`); de cara al navegador se usa `APP_BASE_URL`, más `APP_EXTRA_ORIGINS` si hay más de una
+  puerta de entrada (IP de la LAN y nombre de Tailscale, por ejemplo).
 - **Los datos viven en volúmenes con nombre** (`pgdata`, `uploads`) para poder moverlos de
   una máquina a otra con un `.tar.gz`.
 - **Los avisos hacia fuera van firmados y no bloquean.** Un webhook es un POST con firma
@@ -224,7 +225,7 @@ lib/
     claims.ts         Lease de tareas: reclamar, renovar, soltar y barrer lo vencido
     approvals.ts      La puerta: crear, listar, decidir y caducar aprobaciones
   realtime.ts         Bus de eventos en proceso para SSE
-  openapi.ts          Descripción OpenAPI, construida con APP_BASE_URL
+  openapi.ts          Descripción OpenAPI, con el origen de la petición como servidor
   webhook.ts          Catálogo de eventos y emparejamiento de suscripciones (puro, con tests)
   webhook-signature.ts Firma y verificación HMAC-SHA256 (con tests)
   storage.ts          Artefactos en el volumen "uploads"

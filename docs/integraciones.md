@@ -104,8 +104,9 @@ Tres decisiones que conviene conocer:
 ### Especificación OpenAPI
 
 `GET /api/openapi.json` devuelve la descripción OpenAPI 3.1 de toda la API de agentes, con el
-`servers` tomado de `APP_BASE_URL`, así que sirve igual desde cualquier máquina de la LAN. Es
-pública a propósito: describe la forma de la API, no sus datos.
+`servers` tomado del origen por el que llega la petición (si está declarado en `APP_BASE_URL` o
+`APP_EXTRA_ORIGINS`), así que sirve igual desde la LAN o desde Tailscale. Es pública a propósito:
+describe la forma de la API, no sus datos.
 
 ```bash
 curl -s "$BASE/api/openapi.json" | jq '.paths | keys'

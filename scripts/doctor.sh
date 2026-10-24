@@ -203,6 +203,42 @@ else
     bad "APP_BASE_URL usa localhost: desde otro dispositivo apunta al dispositivo, no al servidor"
   else
     ok "APP_BASE_URL=${APP_BASE_URL}"
+
+    # La IP se queda obsoleta en cuanto el router reparte otra por DHCP. Si
+    # APP_BASE_URL apunta a una IPv4 que esta máquina no tiene, el contenedor
+    # estará sano pero nadie entrará por esa URL (localhost siempre funciona y
+    # disimula el problema).
+    BASE_HOST="$(printf '%s' "$APP_BASE_URL" | sed -E 's#^https?://([^/:]+).*#\1#')"
+    if printf '%s' "$BASE_HOST" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+      if command -v ip > /dev/null 2>&1; then
+        LOCAL_IPS="$(ip -o -4 addr show scope global 2> /dev/null | awk '{print $4}' | cut -d/ -f1)"
+      else
+        LOCAL_IPS="$(ifconfig 2> /dev/null | awk '/inet /{print $2}' | grep -v '^127\.')"
+      fi
+      if ! printf '%s\n' "$LOCAL_IPS" | grep -qxF "$BASE_HOST"; then
+        warn "APP_BASE_URL apunta a ${BASE_HOST}, que no es una IP de esta máquina"
+        printf '      IPs ahora: %s\n' "$(printf '%s\n' "$LOCAL_IPS" | tr '\n' ' ')"
+        printf '      Con DHCP la IP cambia: actualiza .env y reinicia, o entra por un nombre\n'
+        printf '      estable (Tailscale, DNS interno) y decláralo en APP_EXTRA_ORIGINS.\n'
+      else
+        ok "${BASE_HOST} es una IP de esta máquina"
+      fi
+    fi
+  fi
+
+  if [ -n "${APP_EXTRA_ORIGINS:-}" ]; then
+    IFS=',' read -r -a EXTRA_ORIGINS <<< "$APP_EXTRA_ORIGINS"
+    for origin in "${EXTRA_ORIGINS[@]}"; do
+      origin="$(printf '%s' "$origin" | tr -d '[:space:]')"
+      [ -n "$origin" ] || continue
+      if ! printf '%s' "$origin" | grep -Eq '^https?://[^/]+$'; then
+        bad "APP_EXTRA_ORIGINS: '${origin}' no es un origen puro (http(s)://host[:puerto], sin ruta)"
+      elif printf '%s' "$origin" | grep -Eq '//localhost([:/]|$)'; then
+        bad "APP_EXTRA_ORIGINS: '${origin}' usa localhost, que apunta al dispositivo que navega"
+      else
+        ok "APP_EXTRA_ORIGINS incluye ${origin}"
+      fi
+    done
   fi
 
   if [ -z "${POSTGRES_PASSWORD:-}" ]; then

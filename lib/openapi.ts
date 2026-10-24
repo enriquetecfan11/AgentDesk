@@ -350,7 +350,7 @@ export function buildOpenApi(baseUrl: string) {
         'y viaja también en los webhooks `approval.requested` y `approval.decided`.',
       ].join('\n'),
     },
-    servers: [{ url: baseUrl, description: 'Según APP_BASE_URL' }],
+    servers: [{ url: baseUrl, description: 'Origen de esta petición' }],
     tags: [{ name: 'Humano', description: 'API de la aplicación, con cookie de sesión.' }, { name: 'Agentes', description: 'API de agentes, con token Bearer y scopes.' }],
     security: [{ bearerAuth: [] }],
     paths: {

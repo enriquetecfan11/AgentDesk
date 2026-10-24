@@ -66,6 +66,9 @@ done
 
 step "Acceso"
 info "URL base: $APP_BASE_URL"
+if [ -n "${APP_EXTRA_ORIGINS:-}" ]; then
+  info "también por: $APP_EXTRA_ORIGINS"
+fi
 
 if command -v curl > /dev/null; then
   health="$(curl -fsS --max-time 8 "$APP_BASE_URL/api/health" 2> /dev/null || true)"
@@ -73,7 +76,25 @@ if command -v curl > /dev/null; then
     info "/api/health: ok"
   else
     info "/api/health: no responde en $APP_BASE_URL"
-    info "  (si estás en otra máquina, prueba a abrir la URL en el navegador)"
+
+    # Fallo típico: el .env se quedó con la IP que el router dio antes. Se
+    # comprueba antes de sugerir nada, para no mandar al usuario al navegador
+    # cuando el problema está en una línea del .env.
+    BASE_HOST="$(printf '%s' "$APP_BASE_URL" | sed -E 's#^https?://([^/:]+).*#\1#')"
+    if printf '%s' "$BASE_HOST" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+      if command -v ip > /dev/null 2>&1; then
+        LOCAL_IPS="$(ip -o -4 addr show scope global 2> /dev/null | awk '{print $4}' | cut -d/ -f1)"
+      else
+        LOCAL_IPS="$(ifconfig 2> /dev/null | awk '/inet /{print $2}' | grep -v '^127\.')"
+      fi
+      if ! printf '%s\n' "$LOCAL_IPS" | grep -qxF "$BASE_HOST"; then
+        info "  ${BASE_HOST} no es una IP de esta máquina."
+        info "  IPs ahora: $(printf '%s\n' "$LOCAL_IPS" | tr '\n' ' ')"
+        info "  Actualiza APP_BASE_URL en .env y reinicia: docker compose up -d"
+      fi
+    fi
+
+    info "  localhost sí funciona siempre; el problema está en la URL de fuera."
   fi
 fi
 

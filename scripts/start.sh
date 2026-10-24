@@ -131,6 +131,9 @@ if [ "$USERS" = "0" ]; then
   printf '  Todavía no hay ningún usuario. Abre esto para crear el primero:\n\n    %s/setup\n\n' "$APP_BASE_URL"
 else
   printf '  Ábrelo en:  %s\n' "$APP_BASE_URL"
+  if [ -n "${APP_EXTRA_ORIGINS:-}" ]; then
+    printf '  También por: %s\n' "$APP_EXTRA_ORIGINS"
+  fi
   printf '  Desde otra máquina de la LAN o por Tailscale, la misma dirección.\n\n'
 fi
 

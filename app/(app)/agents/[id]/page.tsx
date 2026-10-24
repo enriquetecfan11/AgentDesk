@@ -2,11 +2,11 @@ import { notFound } from 'next/navigation';
 import { z } from 'zod';
 
 import { AgentDetail } from '@/components/agents/agent-detail';
+import { getBaseUrl } from '@/lib/base-url';
 import { getAgent, listTokens } from '@/lib/domain/agents';
 import { listDelegations } from '@/lib/domain/delegations';
 import { listRuns } from '@/lib/domain/runs';
 import { listTasks } from '@/lib/domain/tasks';
-import { getEnv } from '@/lib/env';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +25,10 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
     listTasks({ limit: 200 }),
   ]);
 
+  // The origin the user actually opened: the quick-start commands and the MCP
+  // endpoint must be reachable from that same device.
+  const baseUrl = await getBaseUrl();
+
   return (
     <AgentDetail
       agent={agent}
@@ -33,7 +37,7 @@ export default async function AgentPage({ params }: { params: Promise<{ id: stri
       runs={runs}
       // Only the fields the "delegate" dialog needs; the DTO is heavy.
       tasks={tasks.map((task) => ({ id: task.id, title: task.title, status: task.status }))}
-      baseUrl={getEnv().APP_BASE_URL}
+      baseUrl={baseUrl}
     />
   );
 }

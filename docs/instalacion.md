@@ -51,7 +51,8 @@ Todas viven en `.env` (nunca se commitea; `.env.example` está documentado y sí
 
 | Variable | Por defecto | Descripción |
 |---|---|---|
-| `APP_BASE_URL` | — | **Obligatoria.** URL tal como la escribe el navegador, p. ej. `http://192.168.1.50:3000`. Se usa para enlaces, cookies y CORS. No debe contener `localhost`. |
+| `APP_BASE_URL` | — | **Obligatoria.** URL canónica tal como la escribe el navegador, p. ej. `http://192.168.1.50:3000`. Es el origen de respaldo para enlaces absolutos. No debe contener `localhost`. |
+| `APP_EXTRA_ORIGINS` | vacío | Orígenes adicionales de la **misma** instalación, separados por comas (p. ej. el nombre de Tailscale junto a la IP de la LAN). Sin rutas. |
 | `HOST_BIND` | `0.0.0.0` | Interfaz del host donde se publica el puerto. `0.0.0.0` = toda la LAN. |
 | `APP_PORT` | `3000` | Puerto del host. El contenedor escucha siempre en `3000`. |
 | `POSTGRES_USER` | `agentdesk` | Usuario de Postgres. |
@@ -60,18 +61,53 @@ Todas viven en `.env` (nunca se commitea; `.env.example` está documentado y sí
 | `DATABASE_URL` | — | Conexión usada por la app. Compose la construye a partir de `POSTGRES_*` con host `db`. |
 | `UPLOADS_DIR` | `/app/uploads` | Directorio de artefactos dentro del contenedor (volumen `uploads`). |
 
-### Sobre `APP_BASE_URL`
+### Sobre `APP_BASE_URL` y `APP_EXTRA_ORIGINS`
 
-Es la variable que más problemas causa si se pone mal:
+`APP_BASE_URL` es la variable que más problemas causa si se pone mal:
 
-- Si empieza por `https://`, la cookie de sesión se marca `Secure`. Si empieza por `http://`,
-  no. Si declaras `https://` pero sirves por `http://`, el navegador descartará la cookie y
-  parecerá que el login no funciona.
-- Se usa para construir enlaces absolutos y como origen permitido en CORS.
 - **Nunca `localhost`**: desde otro dispositivo de la LAN, `localhost` apunta a ese
   dispositivo, no al servidor.
+- Es el origen canónico: la URL de respaldo cuando el host de la petición no está declarado.
+- **No hace falta poner la IP si vas a entrar por varios sitios.** Añade los demás orígenes en
+  `APP_EXTRA_ORIGINS` y los enlaces absolutos (comandos del agente, `servers` del OpenAPI,
+  pantalla de ajustes) seguirán el host por el que entres:
 
-Si tu IP cambia, actualiza `APP_BASE_URL` y reinicia: `docker compose up -d`.
+```ini
+APP_BASE_URL=http://192.168.1.195:3000
+APP_EXTRA_ORIGINS=http://kikes-mac-mini.bombay-pomano.ts.net:3000
+```
+
+- La cookie `Secure` se decide **por petición**: `https://` en ese acceso concreto, no según
+  `APP_BASE_URL`. Así puedes servir HTTP en la LAN y HTTPS por un proxy a la vez.
+- Un `Host` que no esté ni en `APP_BASE_URL` ni en `APP_EXTRA_ORIGINS` no se refleja nunca:
+  se cae a la URL canónica.
+
+Si tu IP cambia, actualiza `APP_BASE_URL` y reinicia: `docker compose up -d`. Si prefieres no
+tocar nada cuando cambie, entra por un nombre estable (Tailscale, DNS interno) y déjalo en
+`APP_EXTRA_ORIGINS`.
+
+### Entrar por la LAN y por Tailscale a la vez
+
+El contenedor ya escucha en todas las interfaces (`HOST_BIND=0.0.0.0`), así que la parte de red
+no hay que tocarla. Para el nombre de Tailscale:
+
+```bash
+tailscale status --json | jq -r '.Self.DNSName'   # → kikes-mac-mini.tailXXXX.ts.net.
+```
+
+quita el punto final y añade el origen a `.env`:
+
+```ini
+APP_BASE_URL=http://192.168.1.195:3000
+APP_EXTRA_ORIGINS=http://kikes-mac-mini.tailXXXX.ts.net:3000
+```
+
+`docker compose up -d` y listo: la misma app responde por las dos puertas, y los enlaces
+absolutos (comandos del agente, OpenAPI) usan la que hayas abierto. El dispositivo que entre por
+el nombre de Tailscale necesita Tailscale conectado; el que entre por la IP, estar en la LAN.
+
+Si además publicas por HTTPS (Tailscale Funnel o un proxy), la cookie se marca `Secure` sola en
+ese acceso concreto, sin romper el HTTP de la LAN.
 
 ---
 
@@ -90,7 +126,9 @@ Después, `/login` es la puerta de entrada habitual.
 
 - La contraseña se guarda como hash **Argon2id** (19 MiB, 2 iteraciones, 1 lane).
 - El login crea una fila en `sessions` y emite la cookie `ad_session`:
-  `httpOnly`, `sameSite=lax`, `Secure` **solo** si `APP_BASE_URL` empieza por `https://`.
+  `httpOnly`, `sameSite=lax`, `Secure` **solo** si el acceso concreto va por `https://`
+  (se decide por petición, así que un mismo despliegue puede ser HTTP en la LAN y HTTPS
+  detrás de un proxy).
 - En la base de datos solo se guarda `sha256(token)`: un volcado de la base de datos no
   permite suplantar una sesión.
 - Caducidad fija de 30 días. No hay renovación deslizante.

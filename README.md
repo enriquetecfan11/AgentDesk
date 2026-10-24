@@ -76,6 +76,13 @@ APP_BASE_URL=http://192.168.1.50:3000
 POSTGRES_PASSWORD=algo-largo-y-solo-con-caracteres-seguros
 ```
 
+Si vas a entrar por más de un sitio (la IP de la LAN **y** un nombre de Tailscale, por ejemplo),
+no dupliques instalaciones: declara el segundo origen y la app seguirá el host que uses.
+
+```ini
+APP_EXTRA_ORIGINS=http://kikes-mac-mini.tailXXXX.ts.net:3000
+```
+
 **El primer usuario** se crea en el navegador: abre `APP_BASE_URL`, te redirige a `/setup`, eliges
 nombre, email y contraseña (12 caracteres mínimo) y listo. A partir de ahí, `/login`. Si te olvidas
 de la contraseña, desde la máquina donde corre Docker:

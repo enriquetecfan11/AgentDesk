@@ -83,6 +83,8 @@ scp backups/agentdesk-2026-01-31-2200.tar.gz usuario@proxmox:/ruta/a/agent-os/ba
 
 ```ini
 APP_BASE_URL=http://192.168.1.60:3000    # la IP de la VM, no la del Mac mini
+# Opcional: otros nombres por los que también responderá la misma instalación
+# APP_EXTRA_ORIGINS=http://agentdesk.tailXXXX.ts.net:3000
 ```
 
 El resto (usuario, contraseña y base de datos) se queda igual. La `DATABASE_URL` sigue apuntando a
