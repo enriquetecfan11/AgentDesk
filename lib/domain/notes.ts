@@ -6,7 +6,7 @@ import { db } from '@/lib/db/client';
 import { noteLinks, notes, projects } from '@/lib/db/schema';
 import { serializeNote } from '@/lib/domain/serialize';
 import { markdownFileToNote, noteToMarkdownFile } from '@/lib/notes/frontmatter';
-import { joinNoteContent, markdownToPlainText } from '@/lib/notes/markdown';
+import { joinNoteContent, markdownToPlainText, noteExcerpt } from '@/lib/notes/markdown';
 import { extractWikiLinks, normalizeTitle } from '@/lib/notes/wikilinks';
 import { emitEvent } from '@/lib/domain/events';
 import type { NoteDetailDTO, NoteListItemDTO, NoteRef } from '@/lib/types';
@@ -188,7 +188,7 @@ export async function listNotes(filters: NoteFilters = {}): Promise<NoteListItem
     return {
       id: note.id,
       title: note.title,
-      excerpt: markdownToPlainText(note.contentMd, 140),
+      excerpt: noteExcerpt(note.contentMd, note.title),
       authorType: note.authorType,
       authorId: note.authorId,
       authorName: note.authorName,

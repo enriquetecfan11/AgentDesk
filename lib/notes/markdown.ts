@@ -10,6 +10,8 @@
  * quotes, rules, links, images, `[[wiki links]]` and hard line breaks.
  */
 
+import { normalizeTitle } from './wikilinks';
+
 export type InlineNode =
   | { type: 'text'; value: string }
   | { type: 'strong'; children: InlineNode[] }
@@ -329,9 +331,9 @@ export function plainText(nodes: InlineNode[]): string {
     .join('');
 }
 
-/** Flattens a note to text: used for list excerpts and for search. */
-export function markdownToPlainText(source: string, limit = 0): string {
-  const text = parseMarkdown(source)
+/** Flattens blocks to one line of text, then applies the optional limit. */
+function blocksToPlainText(blocks: BlockNode[], limit = 0): string {
+  const text = blocks
     .map((block) => {
       switch (block.type) {
         case 'code':
@@ -349,6 +351,39 @@ export function markdownToPlainText(source: string, limit = 0): string {
     .trim();
 
   return limit > 0 && text.length > limit ? `${text.slice(0, limit).trimEnd()}…` : text;
+}
+
+/** Flattens a note to text: used for list excerpts and for search. */
+export function markdownToPlainText(source: string, limit = 0): string {
+  return blocksToPlainText(parseMarkdown(source), limit);
+}
+
+/** Whether the first block is an H1 that just repeats the note title. */
+function repeatsTitle(blocks: BlockNode[], title: string): boolean {
+  const first = blocks[0];
+  if (!first || first.type !== 'heading' || first.level !== 1) return false;
+
+  const wanted = normalizeTitle(title);
+  return wanted.length > 0 && normalizeTitle(plainText(first.children)) === wanted;
+}
+
+/**
+ * Drops a leading `# Título` when the note's title field already says the same
+ * thing. Markdown exports from Obsidian start with the title as a heading, and
+ * showing it twice — once as the title, once as the first line — reads as a
+ * bug.
+ */
+export function stripDuplicateTitleHeading(blocks: BlockNode[], title?: string): BlockNode[] {
+  if (!title || !repeatsTitle(blocks, title)) return blocks;
+  return blocks.slice(1);
+}
+
+/**
+ * One-line summary for the note list, with the redundant title heading removed
+ * so the excerpt adds information instead of echoing the row above it.
+ */
+export function noteExcerpt(source: string, title: string, limit = 140): string {
+  return blocksToPlainText(stripDuplicateTitleHeading(parseMarkdown(source), title), limit);
 }
 
 /**

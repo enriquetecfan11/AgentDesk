@@ -2,7 +2,12 @@
 
 import { Fragment, useMemo } from 'react';
 
-import { parseMarkdown, type BlockNode, type InlineNode } from '@/lib/notes/markdown';
+import {
+  parseMarkdown,
+  stripDuplicateTitleHeading,
+  type BlockNode,
+  type InlineNode,
+} from '@/lib/notes/markdown';
 import { normalizeTitle } from '@/lib/notes/wikilinks';
 import type { NoteRef } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -16,12 +21,15 @@ import { cn } from '@/lib/utils';
  */
 export function MarkdownView({
   source,
+  title,
   noteIndex,
   onOpenNote,
   onCreateNote,
   className,
 }: {
   source: string;
+  /** The note's title: a leading `# Título` that repeats it is not rendered. */
+  title?: string;
   /** Every existing note, keyed by normalised title, to resolve `[[links]]`. */
   noteIndex: Map<string, NoteRef>;
   onOpenNote: (id: string) => void;
@@ -29,9 +37,16 @@ export function MarkdownView({
   onCreateNote?: (title: string) => void;
   className?: string;
 }) {
-  const blocks = useMemo(() => parseMarkdown(source), [source]);
+  const blocks = useMemo(
+    () => stripDuplicateTitleHeading(parseMarkdown(source), title),
+    [source, title],
+  );
 
   if (blocks.length === 0) {
+    // A body that was only the redundant title heading has nothing left to
+    // show; the title is already above.
+    if (source.trim().length > 0) return null;
+
     return (
       <p className={cn('text-sm text-muted-foreground', className)}>
         Esta nota está vacía. Pulsa «Editar» para escribir.

@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   joinNoteContent,
   markdownToPlainText,
+  noteExcerpt,
   parseInline,
   parseMarkdown,
   plainText,
+  stripDuplicateTitleHeading,
 } from '@/lib/notes/markdown';
 
 describe('parseMarkdown — block level', () => {
@@ -135,6 +137,52 @@ describe('markdownToPlainText', () => {
     const text = markdownToPlainText('una '.repeat(40), 20);
     expect(text.endsWith('…')).toBe(true);
     expect(text.length).toBeLessThanOrEqual(21);
+  });
+});
+
+describe('noteExcerpt', () => {
+  it('drops a leading heading that repeats the title', () => {
+    const source = '# INFRA.md — Mapa de la infraestructura\n\nDocumento vivo sobre el cluster.';
+
+    expect(noteExcerpt(source, 'INFRA.md — Mapa de la infraestructura')).toBe(
+      'Documento vivo sobre el cluster.',
+    );
+  });
+
+  it('compares titles ignoring case, accents and extra spaces', () => {
+    const source = '# GESTIÓN  de incidencias\n\nTurnos y guardias.';
+    expect(noteExcerpt(source, 'gestión de incidencias')).toBe('Turnos y guardias.');
+  });
+
+  it('keeps the heading when it is not the title', () => {
+    const source = '# Otra cosa\n\nCuerpo.';
+    expect(noteExcerpt(source, 'Mi nota')).toBe('Otra cosa Cuerpo.');
+  });
+
+  it('never drops a level-2 heading', () => {
+    const source = '## Resumen\n\nCuerpo.';
+    expect(noteExcerpt(source, 'Resumen')).toBe('Resumen Cuerpo.');
+  });
+
+  it('still truncates after removing the title', () => {
+    const source = `# Nota\n\n${'palabra '.repeat(40)}`;
+    const excerpt = noteExcerpt(source, 'Nota', 20);
+
+    expect(excerpt.startsWith('palabra')).toBe(true);
+    expect(excerpt.endsWith('…')).toBe(true);
+  });
+});
+
+describe('stripDuplicateTitleHeading', () => {
+  it('removes only the first block', () => {
+    const blocks = stripDuplicateTitleHeading(parseMarkdown('# Nota\n\nCuerpo'), 'Nota');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe('paragraph');
+  });
+
+  it('leaves the blocks alone without a title', () => {
+    const blocks = parseMarkdown('# Nota');
+    expect(stripDuplicateTitleHeading(blocks)).toBe(blocks);
   });
 });
 

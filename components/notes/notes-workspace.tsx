@@ -1,6 +1,6 @@
 'use client';
 
-import { Bot, Download, FilePlus2, Loader2, Search, Upload } from 'lucide-react';
+import { Bot, Download, FilePlus2, Loader2, MoreHorizontal, Search, Upload } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
@@ -8,11 +8,17 @@ import { toast } from 'sonner';
 import { NoteEditor } from '@/components/notes/note-editor';
 import { NoteImportDialog, type ImportSummary } from '@/components/notes/note-import-dialog';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api } from '@/lib/api-client';
 import { formatTimestamp } from '@/lib/dates';
-import { markdownToPlainText } from '@/lib/notes/markdown';
+import { noteExcerpt } from '@/lib/notes/markdown';
 import { normalizeTitle } from '@/lib/notes/wikilinks';
 import type { NoteDetailDTO, NoteListItemDTO, NoteRef, ProjectDTO } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -116,7 +122,7 @@ export function NotesWorkspace({
               ? {
                   ...note,
                   title: next.note.title,
-                  excerpt: markdownToPlainText(next.note.contentMd, 140),
+                  excerpt: noteExcerpt(next.note.contentMd, next.note.title),
                   authorType: next.note.authorType,
                   authorId: next.note.authorId,
                   authorName: next.note.authorName,
@@ -238,7 +244,7 @@ export function NotesWorkspace({
     <div className="flex h-full">
       <aside
         className={cn(
-          'flex w-full flex-col border-r border-border sm:w-72 sm:shrink-0',
+          'flex w-full min-w-0 flex-col overflow-hidden border-r border-border sm:w-72 sm:shrink-0',
           pane === 'editor' && 'hidden sm:flex',
         )}
       >
@@ -250,50 +256,55 @@ export function NotesWorkspace({
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Buscar notas…"
               aria-label="Buscar notas"
-              className="h-8 pl-7 text-xs"
+              className="h-9 pl-7 text-xs"
             />
           </div>
 
           <Button
-            variant="ghost"
             size="icon"
-            className="size-8 shrink-0"
+            className="size-9 shrink-0"
             onClick={() => void createNote()}
             aria-label="Nueva nota"
             title="Nueva nota"
           >
             <FilePlus2 className="size-4" />
           </Button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-9 shrink-0 text-muted-foreground"
+                aria-label="Más acciones del vault"
+                title="Más acciones"
+              >
+                <MoreHorizontal className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem onSelect={() => setImportOpen(true)}>
+                <Upload className="mr-2 size-4" />
+                Importar vault
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={exporting}
+                onSelect={() => void exportVault()}
+              >
+                {exporting ? (
+                  <Loader2 className="mr-2 size-4 animate-spin" />
+                ) : (
+                  <Download className="mr-2 size-4" />
+                )}
+                Exportar vault
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
-        <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
-            onClick={() => setImportOpen(true)}
-          >
-            <Upload className="size-3.5" />
-            Importar
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
-            onClick={() => void exportVault()}
-            disabled={exporting}
-          >
-            {exporting ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <Download className="size-3.5" />
-            )}
-            Exportar
-          </Button>
-
+        <div className="flex items-center gap-2 border-b border-border px-2 py-1.5">
           <div
-            className="ml-auto flex items-center gap-0.5 rounded-md border border-border/60 p-0.5"
+            className="grid min-w-0 flex-1 grid-cols-3 gap-0.5 rounded-md border border-border/60 bg-muted/30 p-0.5"
             role="group"
             aria-label="Filtrar notas por autor"
           >
@@ -308,7 +319,10 @@ export function NotesWorkspace({
                 key={option.value}
                 variant={authorFilter === option.value ? 'secondary' : 'ghost'}
                 size="sm"
-                className="h-6 px-1.5 text-[11px]"
+                className={cn(
+                  'h-6 w-full px-1 text-[11px]',
+                  authorFilter === option.value && 'shadow-sm',
+                )}
                 aria-pressed={authorFilter === option.value}
                 onClick={() => setAuthorFilter(option.value)}
               >
@@ -317,13 +331,13 @@ export function NotesWorkspace({
             ))}
           </div>
 
-          <span className="ml-1 text-[11px] tabular-nums text-muted-foreground">
+          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
             {filtered.length}
             {filtered.length !== notes.length && `/${notes.length}`}
           </span>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {filtered.length === 0 ? (
             <p className="px-3 py-6 text-center text-xs text-muted-foreground">
               {notes.length === 0 ? 'Todavía no hay notas.' : 'Ninguna nota coincide.'}
@@ -339,7 +353,8 @@ export function NotesWorkspace({
                     className={cn(
                       'flex w-full flex-col gap-0.5 border-b border-border/60 px-3 py-2 text-left',
                       'hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-                      note.id === selectedId && 'bg-muted',
+                      note.id === selectedId &&
+                        'bg-muted/60 shadow-[inset_2px_0_0_hsl(var(--primary))]',
                     )}
                   >
                     <span className="truncate text-sm font-medium">{note.title}</span>
@@ -460,7 +475,7 @@ function toListItem(detail: NoteDetailDTO): NoteListItemDTO {
   return {
     id: detail.note.id,
     title: detail.note.title,
-    excerpt: markdownToPlainText(detail.note.contentMd, 140),
+    excerpt: noteExcerpt(detail.note.contentMd, detail.note.title),
     authorType: detail.note.authorType,
     authorId: detail.note.authorId,
     authorName: detail.note.authorName,

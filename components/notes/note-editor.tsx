@@ -228,6 +228,7 @@ export function NoteEditor({
           <div className="px-4 py-3">
             <MarkdownView
               source={contentMd}
+              title={detail.note.title}
               noteIndex={noteIndex}
               onOpenNote={onOpenNote}
               onCreateNote={onCreateNote}
