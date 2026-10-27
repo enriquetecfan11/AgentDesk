@@ -8,6 +8,33 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
+ * CORS for browser clients (the dashboard at localhost:5173, or the Pi at
+ * :4173). A wildcard origin is safe here because auth is a Bearer token, never
+ * a cookie: opening the origin does not open the data. The headers go on every
+ * response, not just the preflight — a browser rejects the real response too if
+ * they are missing, and that includes the 401/403 the dashboard needs to read.
+ */
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'OPTIONS, GET, POST',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Accept, Mcp-Session-Id',
+  'Access-Control-Max-Age': '300',
+};
+
+/** Stamps the CORS headers onto any response, streamed or not. */
+function withCors(response: Response): Response {
+  for (const [name, value] of Object.entries(corsHeaders)) {
+    response.headers.set(name, value);
+  }
+  return response;
+}
+
+/** Preflight: no token is sent on an OPTIONS, so it must not require one. */
+export function OPTIONS() {
+  return new Response(null, { status: 204, headers: corsHeaders });
+}
+
+/**
  * POST /api/mcp — the MCP server, over Streamable HTTP.
  *
  * It lives in the app rather than in a container of its own, so a tool call
@@ -22,7 +49,7 @@ export const dynamic = 'force-dynamic';
  * read the `403` as text instead of failing to connect at all.
  */
 export async function POST(request: Request) {
-  return route(async () => {
+  return withCors(await route(async () => {
     const actor = await requireAgent(request);
     const payload = await readJson(request);
     const responses = await handleIncoming(payload, handlersFor(actor));
@@ -50,7 +77,7 @@ export async function POST(request: Request) {
         'X-Accel-Buffering': 'no',
       },
     });
-  });
+  }));
 }
 
 /**
@@ -63,7 +90,7 @@ export async function POST(request: Request) {
  * needs to read.
  */
 export async function GET(request: Request) {
-  return route(async () => {
+  return withCors(await route(async () => {
     // A token is not required to read this, but if one was sent it has to be
     // valid: half-working credentials are worth saying out loud.
     if (parseBearerToken(request.headers.get('authorization'))) {
@@ -77,5 +104,5 @@ export async function GET(request: Request) {
       tools: toolNames(),
       events: '/api/v1/events',
     });
-  });
+  }));
 }
